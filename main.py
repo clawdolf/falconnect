@@ -1,13 +1,17 @@
 """FalconConnect v3 — middleware layer for dual GHL + Notion sync."""
 
+import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from db.database import init_db
-from routers import leads, webhooks, calendar, analytics, admin
+from routers import leads, webhooks, calendar, analytics, admin, sync
+from services.notion_ghl_sync import sync_loop
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,14 +25,26 @@ async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
     logger.info("FalconConnect v3 starting up …")
     await init_db()
+
+    # Start background Notion → GHL sync loop
+    sync_task = asyncio.create_task(sync_loop())
+    logger.info("Notion→GHL background sync task started")
+
     yield
+
+    # Shutdown
+    sync_task.cancel()
+    try:
+        await sync_task
+    except asyncio.CancelledError:
+        pass
     logger.info("FalconConnect v3 shutting down …")
 
 
 app = FastAPI(
     title="FalconConnect v3",
     description="Middleware layer: dual GHL + Notion sync, iCal feed, analytics hub.",
-    version="3.0.0",
+    version="3.1.0",
     lifespan=lifespan,
 )
 
@@ -36,16 +52,31 @@ app = FastAPI(
 @app.get("/health")
 async def root_health():
     """Root-level liveness probe — Render expects /health."""
+    from config import get_settings
+    settings = get_settings()
     return {
         "status": "healthy",
         "service": "FalconConnect v3",
-        "version": "3.0.0",
+        "version": "3.1.0",
+        "clerk_configured": bool(settings.clerk_secret_key),
+        "sync_enabled": settings.notion_ghl_sync_enabled,
+        "sync_dry_run": settings.notion_ghl_sync_dry_run,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
+# API routers
 app.include_router(leads.router, prefix="/api/public", tags=["Leads"])
 app.include_router(webhooks.router, prefix="/api/webhooks", tags=["Webhooks"])
 app.include_router(calendar.router, prefix="/api/calendar", tags=["Calendar"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
+app.include_router(sync.router, prefix="/api/sync", tags=["Sync"])
+
+# Serve React frontend (built files) — must be LAST so API routes take priority
+frontend_dist = os.path.join(os.path.dirname(__file__), "frontend", "dist")
+if os.path.isdir(frontend_dist):
+    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
+    logger.info("Serving frontend from %s", frontend_dist)
+else:
+    logger.info("No frontend/dist directory found — frontend not served")

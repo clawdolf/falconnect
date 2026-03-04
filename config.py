@@ -25,6 +25,16 @@ class Settings(BaseSettings):
     # --- Database ---
     database_url: str = "sqlite+aiosqlite:///./falconconnect.db"
 
+    # --- Clerk Auth ---
+    clerk_publishable_key: str = ""
+    clerk_secret_key: str = ""
+
+    # --- Notion → GHL Sync ---
+    notion_ghl_sync_enabled: bool = True
+    notion_ghl_sync_dry_run: bool = True
+    notion_ghl_sync_after_date: str = "2026-03-03"
+    notion_ghl_sync_interval: int = 300
+
     # --- Plaid (Phase 2) ---
     plaid_client_id: str = ""
     plaid_secret: str = ""

@@ -11,3 +11,5 @@ python-dotenv
 icalendar
 pytz
 python-dateutil
+PyJWT
+cryptography
