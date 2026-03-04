@@ -32,11 +32,15 @@ async def capture_lead(
     1. Validate the payload.
     2. Calculate age from birth_year and lage_months from mail_date.
     3. Upsert contact + create opportunity in GHL.
-    4. Upsert lead page in Notion.
+    4. Upsert lead page in Notion (with GHL contact ID for xref).
     5. Store the cross-reference (ghl_id ↔ notion_id ↔ phone).
     6. Return IDs and calculated fields.
     """
     lead_dict = payload.model_dump()
+
+    # Normalize source — prefer lead_source over source
+    if payload.lead_source and not payload.source:
+        lead_dict["source"] = payload.lead_source
 
     # Calculate derived fields
     age = calculate_age(payload.birth_year) if payload.birth_year else None
@@ -57,8 +61,12 @@ async def capture_lead(
 
     # Create opportunity in GHL
     try:
-        opp_name = f"{payload.first_name} {payload.last_name} — {payload.source or 'web'}"
-        await ghl.create_opportunity(ghl_contact_id, stage="new", name=opp_name)
+        opp_name = f"{payload.first_name} {payload.last_name} — {payload.lead_source or payload.source or 'web'}"
+        await ghl.create_opportunity(
+            ghl_contact_id,
+            stage_name="New Lead",
+            name=opp_name,
+        )
     except Exception as exc:
         logger.warning("GHL create_opportunity failed (non-fatal): %s", exc)
 

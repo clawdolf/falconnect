@@ -1,6 +1,7 @@
 """FalconConnect v3 — middleware layer for dual GHL + Notion sync."""
 
 import logging
+from datetime import datetime, timezone
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -30,6 +31,18 @@ app = FastAPI(
     version="3.0.0",
     lifespan=lifespan,
 )
+
+# Root-level health check (Render probes /health)
+@app.get("/health")
+async def root_health():
+    """Root-level liveness probe — Render expects /health."""
+    return {
+        "status": "healthy",
+        "service": "FalconConnect v3",
+        "version": "3.0.0",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
 
 app.include_router(leads.router, prefix="/api/public", tags=["Leads"])
 app.include_router(webhooks.router, prefix="/api/webhooks", tags=["Webhooks"])

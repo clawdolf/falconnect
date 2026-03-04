@@ -3,11 +3,11 @@ uvicorn[standard]
 httpx
 sqlalchemy[asyncio]
 asyncpg
+aiosqlite
 alembic
 pydantic
 pydantic-settings
 python-dotenv
 icalendar
 pytz
-notion-client
 python-dateutil

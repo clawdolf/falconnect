@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, Query, Response
 
 from services.calendar import build_ical_feed
-from services.notion import query_upcoming_appointments
+from services.notion import get_upcoming_events
 from utils.auth import verify_calendar_token
 
 logger = logging.getLogger("falconconnect.calendar")
@@ -26,8 +26,8 @@ async def ical_feed(token: str = Query(..., description="Calendar feed secret to
     verify_calendar_token(token)
 
     try:
-        pages = await query_upcoming_appointments(days=90)
-        logger.info("Calendar feed: %d pages with upcoming dates", len(pages))
+        events = await get_upcoming_events(days=90)
+        logger.info("Calendar feed: %d events with upcoming dates", len(events))
     except Exception as exc:
         logger.error("Failed to query Notion for calendar data: %s", exc)
         return Response(
@@ -36,7 +36,7 @@ async def ical_feed(token: str = Query(..., description="Calendar feed secret to
             media_type="text/plain",
         )
 
-    ical_str = build_ical_feed(pages)
+    ical_str = build_ical_feed(events)
 
     return Response(
         content=ical_str,
