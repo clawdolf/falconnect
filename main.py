@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from db.database import init_db
@@ -87,6 +88,20 @@ app = FastAPI(
     description="Middleware layer: dual GHL + Notion sync, iCal feed, analytics hub.",
     version="3.1.0",
     lifespan=lifespan,
+)
+
+# CORS — allow FalconVerify (falconfinancial.org) to call our API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://falconfinancial.org",
+        "https://www.falconfinancial.org",
+        "http://localhost:5173",
+        "http://localhost:8080",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Root-level health check (Render probes /health)
