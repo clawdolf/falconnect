@@ -67,9 +67,6 @@ async def lifespan(app: FastAPI):
     # Alembic migrations ran at build time; this is a fast safety net only.
     await init_db()
 
-    # Seed Seb's licenses if table is empty (migration fallback)
-    await _seed_licenses_if_empty()
-
     # Start background Notion → GHL sync loop
     sync_task = asyncio.create_task(sync_loop())
     logger.info("Notion→GHL background sync task started")
