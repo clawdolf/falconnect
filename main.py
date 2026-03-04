@@ -21,6 +21,45 @@ logger = logging.getLogger("falconconnect")
 
 
 @asynccontextmanager
+async def _seed_licenses_if_empty() -> None:
+    """Seed Seb's 8 licenses from v2 prod DB if table is empty. Idempotent."""
+    from sqlalchemy import text
+    from db.database import _get_session_factory  # type: ignore[attr-defined]
+
+    SEB_USER_ID = "72dc5b7c-ba2c-4a1d-83b9-733ff600c0d5"
+    LICENSES = [
+        ("Arizona",        "AZ", None,      "https://sbs.naic.org/solar-external-lookup/lookup/licensee/summary/21408357?jurisdiction=AZ&entityType=IND&licenseType=PRO", False),
+        ("Florida",        "FL", "G258860", "https://licenseesearch.fldfs.com/Licensee/2700806", False),
+        ("Kansas",         "KS", None,      "https://sbs.naic.org/solar-external-lookup/lookup/licensee/summary/21408357?jurisdiction=KS&entityType=IND&licenseType=PRO", False),
+        ("Maine",          "ME", None,      "https://www.pfr.maine.gov/ALMSOnline/ALMSQuery/ShowDetail.aspx?DetailToken=704F3C701A9F11E086BB0F98AA047C448C67C5003D086308CD98C8424EC1769E", False),
+        ("North Carolina", "NC", None,      "https://sbs.naic.org/solar-external-lookup/lookup/licensee/summary/21408357?jurisdiction=NC&entityType=IND&licenseType=PRO", False),
+        ("Oregon",         "OR", None,      "https://sbs.naic.org/solar-external-lookup/lookup/licensee/summary/21408357?jurisdiction=OR&entityType=IND&licenseType=PRO", False),
+        ("Pennsylvania",   "PA", "1152553", "https://www.sircon.com/ComplianceExpress/Inquiry/consumerInquiry.do?nonSscrb=Y", True),
+        ("Texas",          "TX", "3317972", "https://www.sircon.com/ComplianceExpress/Inquiry/consumerInquiry.do?nonSscrb=Y", True),
+    ]
+    try:
+        factory = _get_session_factory()
+        async with factory() as session:
+            result = await session.execute(text("SELECT COUNT(*) FROM licenses WHERE user_id = :uid"), {"uid": SEB_USER_ID})
+            if result.scalar() == 0:
+                logger.info("Seeding 8 licenses for Seb (table empty)")
+                for state, abbr, lic_num, verify_url, manual in LICENSES:
+                    await session.execute(
+                        text(
+                            "INSERT INTO licenses (user_id, state, state_abbreviation, license_number, "
+                            "verify_url, needs_manual_verification, status, license_type, created_at, updated_at) "
+                            "VALUES (:uid, :state, :abbr, :lic_num, :verify_url, :manual, 'active', 'insurance_producer', NOW(), NOW())"
+                        ),
+                        {"uid": SEB_USER_ID, "state": state, "abbr": abbr, "lic_num": lic_num, "verify_url": verify_url, "manual": manual},
+                    )
+                await session.commit()
+                logger.info("License seed complete — 8 records inserted")
+            else:
+                logger.info("Licenses already seeded — skipping")
+    except Exception as exc:
+        logger.warning("License seed failed (non-fatal): %s", exc)
+
+
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
     logger.info("FalconConnect v3 starting up …")
@@ -28,6 +67,9 @@ async def lifespan(app: FastAPI):
     # init_db() runs create_all (idempotent — creates missing tables, skips existing)
     # Alembic migrations ran at build time; this is a fast safety net only.
     await init_db()
+
+    # Seed Seb's licenses if table is empty (migration fallback)
+    await _seed_licenses_if_empty()
 
     # Start background Notion → GHL sync loop
     sync_task = asyncio.create_task(sync_loop())
