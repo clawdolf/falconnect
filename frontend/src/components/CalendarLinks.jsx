@@ -6,12 +6,12 @@ const CALENDAR_TOKEN = '8a7e8401aa785ad8e9d3459e4c675a9e'
 const FEEDS = [
   {
     name: 'Appointments',
-    description: 'Timed 1-hour events with 60-min and 24-hour reminders',
+    description: '15-min events with 60-min and 24-hour reminders + Notion links',
     path: `/api/calendar/appointments.ics?token=${CALENDAR_TOKEN}`,
   },
   {
     name: 'Follow-Ups',
-    description: 'All-day events with 8am morning reminder',
+    description: 'All-day events with 8am morning reminder + Notion links',
     path: `/api/calendar/followups.ics?token=${CALENDAR_TOKEN}`,
   },
 ]
