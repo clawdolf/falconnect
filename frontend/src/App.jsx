@@ -118,43 +118,25 @@ function CustomSignIn() {
   )
 }
 
-/* ── App Layout with Collapsible Mobile Nav ── */
+/* ── App Layout ── */
 function AppLayout() {
   const [currentPage, setCurrentPage] = useState('dashboard')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
-  // Close mobile nav on page change
-  useEffect(() => {
-    setMobileNavOpen(false)
-  }, [currentPage])
+  useEffect(() => { setMobileNavOpen(false) }, [currentPage])
 
   const currentLabel = NAV_ITEMS.find((i) => i.key === currentPage)?.label || 'Dashboard'
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        {/* Desktop sidebar header */}
-        <div className="sidebar-header desktop-only">
-          <div className="sidebar-wordmark">
-            FALCON<br />CONNECT
-          </div>
+        {/* Wordmark — desktop */}
+        <div className="sidebar-wordmark-wrap">
+          <div className="sidebar-wordmark">FALCON<br />CONNECT</div>
         </div>
 
-        {/* Mobile nav header */}
-        <div
-          className="mobile-nav-header mobile-only"
-          onClick={() => setMobileNavOpen((o) => !o)}
-        >
-          <span className="mobile-nav-label">
-            {currentLabel}
-            <span className={`mobile-nav-chevron ${mobileNavOpen ? 'open' : ''}`}>
-              ›
-            </span>
-          </span>
-        </div>
-
-        {/* Desktop nav — always visible on desktop, hidden on mobile */}
-        <nav className="sidebar-nav desktop-only">
+        {/* Desktop nav — always visible */}
+        <nav className="sidebar-nav">
           {NAV_ITEMS.map((item) => (
             <button
               key={item.key}
@@ -167,9 +149,16 @@ function AppLayout() {
           ))}
         </nav>
 
-        {/* Mobile dropdown nav */}
+        {/* Mobile: current page label + chevron (shown only on small screens via CSS) */}
+        <div className="mobile-nav-toggle" onClick={() => setMobileNavOpen((o) => !o)}>
+          <span className="mobile-nav-label">
+            {currentLabel}
+            <span className={`mobile-nav-chevron ${mobileNavOpen ? 'open' : ''}`}>›</span>
+          </span>
+        </div>
+
         {mobileNavOpen && (
-          <nav className="mobile-nav-dropdown mobile-only">
+          <nav className="mobile-nav-dropdown">
             {NAV_ITEMS.map((item) => (
               <button
                 key={item.key}
@@ -184,16 +173,7 @@ function AppLayout() {
 
         {!DEV_BYPASS && PUBLISHABLE_KEY && (
           <div className="sidebar-footer">
-            <UserButton
-              appearance={{
-                elements: {
-                  avatarBox: {
-                    width: 28,
-                    height: 28,
-                  },
-                },
-              }}
-            />
+            <UserButton appearance={{ elements: { avatarBox: { width: 28, height: 28 } } }} />
           </div>
         )}
       </aside>
