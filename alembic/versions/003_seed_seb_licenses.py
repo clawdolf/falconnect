@@ -9,9 +9,6 @@ Create Date: 2026-03-04
 """
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.sql import table, column
-from sqlalchemy import String, Integer, Boolean
-import datetime
 
 # revision identifiers, used by Alembic.
 revision = "003_seed_seb_licenses"
@@ -104,36 +101,48 @@ LICENSES = [
     },
 ]
 
+# Define a table reference for bulk insert (no ORM needed)
+licenses_table = sa.table(
+    "licenses",
+    sa.column("user_id", sa.String),
+    sa.column("state", sa.String),
+    sa.column("state_abbreviation", sa.String),
+    sa.column("license_number", sa.String),
+    sa.column("verify_url", sa.String),
+    sa.column("needs_manual_verification", sa.Boolean),
+    sa.column("status", sa.String),
+    sa.column("license_type", sa.String),
+)
+
 
 def upgrade() -> None:
-    bind = op.get_bind()
-    # Insert only if not already present (idempotent)
+    conn = op.get_bind()
     for lic in LICENSES:
-        result = bind.execute(
+        # Idempotent: skip if already exists
+        result = conn.execute(
             sa.text(
-                "SELECT COUNT(*) FROM licenses WHERE user_id = :uid AND state_abbreviation = :abbr"
+                "SELECT COUNT(*) FROM licenses "
+                "WHERE user_id = :uid AND state_abbreviation = :abbr"
             ),
             {"uid": lic["user_id"], "abbr": lic["state_abbreviation"]},
         )
         if result.scalar() == 0:
-            bind.execute(
+            conn.execute(
                 sa.text(
-                    """
-                    INSERT INTO licenses
-                        (user_id, state, state_abbreviation, license_number, verify_url,
-                         needs_manual_verification, status, license_type, created_at, updated_at)
-                    VALUES
-                        (:user_id, :state, :state_abbreviation, :license_number, :verify_url,
-                         :needs_manual_verification, :status, :license_type, NOW(), NOW())
-                    """
+                    "INSERT INTO licenses "
+                    "(user_id, state, state_abbreviation, license_number, verify_url, "
+                    "needs_manual_verification, status, license_type, created_at, updated_at) "
+                    "VALUES "
+                    "(:user_id, :state, :state_abbreviation, :license_number, :verify_url, "
+                    ":needs_manual_verification, :status, :license_type, NOW(), NOW())"
                 ),
                 lic,
             )
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    bind.execute(
+    conn = op.get_bind()
+    conn.execute(
         sa.text("DELETE FROM licenses WHERE user_id = :uid"),
         {"uid": SEB_USER_ID},
     )
