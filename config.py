@@ -1,13 +1,23 @@
 """Centralized settings loaded from environment variables via pydantic-settings."""
 
 from functools import lru_cache
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _resolve_env_files() -> tuple[str, ...]:
+    """Return .env file paths that exist — local first, then /etc/secrets."""
+    candidates = [".env", "/etc/secrets/.env"]
+    return tuple(p for p in candidates if Path(p).is_file())
 
 
 class Settings(BaseSettings):
     """Application configuration.  All values come from env vars or .env file."""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=_resolve_env_files(),
+        env_file_encoding="utf-8",
+    )
 
     # --- GHL ---
     ghl_api_key: str = ""
