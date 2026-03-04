@@ -139,7 +139,8 @@ function Licenses() {
     setLoading(true); setError(null)
     try {
       const headers = await getHeaders()
-      const resp = await fetch('/api/licenses', { headers })
+      // /me returns only the current authed user's licenses
+      const resp = await fetch('/api/licenses/me', { headers })
       if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`)
       setLicenses(await resp.json())
     } catch (err) { setError(err.message) }
@@ -206,7 +207,12 @@ function Licenses() {
     <div className="dashboard">
       <section className="section">
         <h2 className="section-title">Licenses</h2>
-        <p className="section-desc">Active insurance licenses with verification links.</p>
+        <p className="section-desc">
+          Active insurance licenses with verification links.{' '}
+          <a href="https://falconfinancial.org/agent/seb#licenses" target="_blank" rel="noopener noreferrer" className="c-accent">
+            View on consumer site ↗
+          </a>
+        </p>
 
         {error && <div className="alert alert-error"><strong>Error:</strong> {error}</div>}
 
@@ -222,6 +228,7 @@ function Licenses() {
                     <th>License #</th>
                     <th>Status</th>
                     <th>Verify</th>
+                    <th>Consumer Site</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -236,8 +243,19 @@ function Licenses() {
                       <td><span className={`badge ${statusBadge(lic.status)}`}>{lic.status}</span></td>
                       <td>
                         {lic.verify_url
-                          ? <a href={lic.verify_url} target="_blank" rel="noopener noreferrer" className="c-accent" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>Verify</a>
+                          ? <a href={lic.verify_url} target="_blank" rel="noopener noreferrer" className="c-accent" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>Verify ↗</a>
                           : <span className="c-muted">—</span>}
+                      </td>
+                      <td>
+                        <a
+                          href="https://falconfinancial.org/agent/seb#licenses"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="c-accent"
+                          style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}
+                        >
+                          falconfinancial.org ↗
+                        </a>
                       </td>
                       <td>
                         <button className="btn btn-sm" onClick={() => startEdit(lic)} disabled={submitting}>Edit</button>
