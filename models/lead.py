@@ -19,7 +19,9 @@ class LeadPayload(BaseModel):
     zip_code: Optional[str] = Field(None, max_length=10)
     birth_year: Optional[int] = Field(None, ge=1900, le=2026)
     mail_date: Optional[date] = None
-    source: Optional[str] = Field("website", max_length=64)
+    lead_source: Optional[str] = Field(None, max_length=64)
+    source: Optional[str] = Field(None, max_length=64)  # alias — deprecated, use lead_source
+    segment: Optional[str] = Field("Never Worked", max_length=64)
     notes: Optional[str] = Field(None, max_length=2000)
 
 
