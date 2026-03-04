@@ -3,7 +3,8 @@ __pycache__/
 *.py[cod]
 *.so
 *.egg-info/
-dist/
+# dist/ intentionally NOT ignored — frontend/dist/ is committed (Render has no Node.js)
+# Always run: git add -f frontend/dist/ after npm run build
 build/
 .eggs/
 
