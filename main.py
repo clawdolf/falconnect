@@ -106,6 +106,37 @@ async def _dedup_licenses() -> None:
         logger.warning("License cleanup failed (non-fatal): %s", exc)
 
 
+async def _fix_agent_user_id() -> None:
+    """Ensure agents.user_id matches the canonical Clerk ID (licenses.user_id).
+
+    Bug: migration 007 seeded agents with a dev-mode hardcoded Clerk ID
+    ('user_3ASljZWeTNVAOMGP62n87Eq0GG9') instead of the real admin Clerk ID.
+    Migration 008 fixed licenses but not agents. This runs on every startup
+    as a safe idempotent fix.
+    """
+    from sqlalchemy import text
+    try:
+        from db.database import _get_session_factory as _sf
+        canonical_uid = os.environ.get("CLERK_ADMIN_USER_ID", "user_3ASrwDOrSTaDxCus6f1B5lnDsgz")
+        stale_uids = [
+            "user_3ASljZWeTNVAOMGP62n87Eq0GG9",          # dev-mode hardcoded (wrong)
+            "72dc5b7c-ba2c-4a1d-83b9-733ff600c0d5",       # FC v3 UUID (wrong)
+        ]
+        async with _sf()() as session:
+            for old_uid in stale_uids:
+                if old_uid == canonical_uid:
+                    continue
+                result = await session.execute(
+                    text("UPDATE agents SET user_id = :new_uid WHERE user_id = :old_uid"),
+                    {"new_uid": canonical_uid, "old_uid": old_uid},
+                )
+                if result.rowcount:
+                    logger.info("Fixed agents.user_id: %s → %s (%d row(s))", old_uid, canonical_uid, result.rowcount)
+            await session.commit()
+    except Exception as exc:
+        logger.warning("Agent user_id fix failed (non-fatal): %s", exc)
+
+
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
     logger.info("FalconConnect v3 starting up …")
@@ -113,6 +144,9 @@ async def lifespan(app: FastAPI):
     # init_db() runs create_all (idempotent — creates missing tables, skips existing)
     # Alembic migrations ran at build time; this is a fast safety net only.
     await init_db()
+
+    # Fix agents.user_id mismatch before seeding/deduping licenses
+    await _fix_agent_user_id()
 
     # Seed Seb's licenses if empty (idempotent), then dedup any duplicates
     await _seed_licenses_if_empty()
@@ -215,21 +249,6 @@ async def seed_licenses_now():
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "inserted": inserted, "skipped": skipped}
 
-
-@app.get("/debug/agent-user-ids")
-async def debug_agent_user_ids():
-    """Temporary: show agents.user_id vs licenses.user_id to diagnose mismatch."""
-    from sqlalchemy import text
-    from db.database import _get_session_factory as _sf
-    async with _sf()() as session:
-        agents_result = await session.execute(text("SELECT slug, user_id FROM agents LIMIT 5"))
-        agents_rows = agents_result.fetchall()
-        lic_result = await session.execute(text("SELECT DISTINCT user_id, COUNT(*) as cnt FROM licenses GROUP BY user_id"))
-        lic_rows = lic_result.fetchall()
-    return {
-        "agents": [{"slug": r[0], "user_id": r[1]} for r in agents_rows],
-        "license_user_ids": [{"user_id": r[0], "count": r[1]} for r in lic_rows],
-    }
 
 
 @app.get("/debug/env")
