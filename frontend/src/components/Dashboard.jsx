@@ -49,12 +49,6 @@ function Dashboard() {
               <div className="status-value">{health.version}</div>
             </div>
             <div className="status-cell">
-              <div className="status-label">Auth</div>
-              <div className={`status-value ${health.clerk_configured ? 'c-green' : 'c-amber'}`}>
-                {health.clerk_configured ? 'Active' : 'Not configured'}
-              </div>
-            </div>
-            <div className="status-cell">
               <div className="status-label">Sync</div>
               <div className={`status-value ${health.sync_enabled ? 'c-green' : 'c-red'}`}>
                 {health.sync_enabled ? (health.sync_dry_run ? 'Dry Run' : 'Live') : 'Disabled'}
