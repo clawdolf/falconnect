@@ -1,4 +1,4 @@
-"""Notion → GHL sync endpoints — dry-run trigger and status."""
+"""Notion → GHL sync endpoints — dry-run trigger, live sync, and status."""
 
 import logging
 from datetime import datetime, timezone
@@ -31,6 +31,32 @@ async def dry_run_notion_ghl_sync(user=Depends(require_auth)):
 
     return {
         "mode": "dry_run",
+        "sync_after_date": settings.notion_ghl_sync_after_date,
+        "sync_enabled": settings.notion_ghl_sync_enabled,
+        "appointments_found": len(results),
+        "results": results,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.post("/notion-to-ghl/live")
+async def live_notion_ghl_sync(user=Depends(require_auth)):
+    """Bug 10 fix: Manually trigger a LIVE sync — actually writes to GHL.
+
+    Uses a 30-day lookahead window. Respects the SYNC_AFTER_DATE filter
+    but ignores NOTION_GHL_SYNC_DRY_RUN (this is explicitly live).
+    Requires Clerk authentication.
+    """
+    settings = get_settings()
+
+    results = await run_notion_ghl_sync(
+        force_dry_run=False,
+        lookahead_days=30,
+    )
+
+    return {
+        "mode": "live",
+        "dry_run": False,
         "sync_after_date": settings.notion_ghl_sync_after_date,
         "sync_enabled": settings.notion_ghl_sync_enabled,
         "appointments_found": len(results),

@@ -127,6 +127,49 @@ def _extract_page_data(page: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+async def _sync_timezone_if_changed(
+    contact_id: str,
+    page_props: Dict[str, Any],
+) -> Optional[str]:
+    """Sync timezone from Notion page to GHL contact if different.
+
+    Reads State and ZIP Code from Notion page properties, determines timezone,
+    and updates GHL if it differs from the current contact timezone.
+    """
+    try:
+        # Extract state and zip from Notion props
+        state_select = page_props.get("State", {}).get("select") or {}
+        state = state_select.get("name", "")
+        zip_items = page_props.get("ZIP Code", {}).get("rich_text", [])
+        zip_code = "".join(item.get("plain_text", "") for item in zip_items) if zip_items else ""
+
+        tz = ghl.get_timezone(zip_code, state)
+        if not tz:
+            return "skipped"
+
+        contact = await ghl.get_contact_by_id(contact_id)
+        if not contact:
+            return "skipped"
+
+        current_tz = contact.get("timezone", "")
+        if current_tz == tz:
+            return "match"
+
+        import httpx
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.put(
+                f"{ghl.GHL_BASE}/contacts/{contact_id}",
+                headers=ghl._headers(),
+                json={"timezone": tz},
+            )
+            resp.raise_for_status()
+            logger.info("GHL timezone updated for %s: %s → %s", contact_id, current_tz, tz)
+            return "updated"
+    except Exception as e:
+        logger.warning("Timezone sync failed for %s: %s", contact_id, e)
+        return "error"
+
+
 async def run_notion_ghl_sync(
     force_dry_run: bool = False,
     lookahead_days: Optional[int] = None,
@@ -135,6 +178,10 @@ async def run_notion_ghl_sync(
 
     Push new/changed appointments to GHL.
     Respects DRY_RUN and SYNC_AFTER_DATE settings.
+
+    Bug 2 fix: Writes sync_log DB entries for every operation.
+    Bug 4 fix: Also detects cancellations (removed Appointment Date).
+    Bug 6 fix: Rate limits Notion API calls (334ms between operations).
 
     Args:
         force_dry_run: If True, forces dry-run mode regardless of settings.
@@ -158,6 +205,17 @@ async def run_notion_ghl_sync(
         # Background poll — get recently modified pages with appointments
         pages_raw = await notion.poll_recent_changes(minutes=6)
 
+        # Bug 4 fix: Also poll for recently modified pages WITHOUT appointments
+        # (these may be cancellations — appointment date was removed)
+        try:
+            cancelled_pages = await notion.poll_recent_changes_no_appointment(minutes=6)
+            if cancelled_pages:
+                for cp in cancelled_pages:
+                    cp["_cancelled"] = True
+                pages_raw = list(pages_raw) + cancelled_pages
+        except Exception as e:
+            logger.warning("Failed to poll for cancellations: %s", e)
+
     if not pages_raw:
         logger.debug("No pages to process")
         return []
@@ -166,6 +224,15 @@ async def run_notion_ghl_sync(
 
     for page_raw in pages_raw:
         page = _extract_page_data(page_raw)
+
+        # Bug 4: Handle cancellations (pages that lost their Appointment Date)
+        if page_raw.get("_cancelled"):
+            result = await _handle_cancellation(page, dry_run)
+            if result:
+                results.append(result)
+            # Bug 6: Rate limit between operations
+            await asyncio.sleep(0.334)
+            continue
 
         appt_date_str = page["appointment_date"]
         if not appt_date_str:
@@ -202,6 +269,13 @@ async def run_notion_ghl_sync(
                 "[DRY RUN] Would push appointment to GHL: %s at %s (phone: %s)",
                 page["name"], appt_date_str, page["phone"],
             )
+            # Bug 2: Log dry-run to sync_log
+            await _write_sync_log(
+                event_type="appointment.dry_run",
+                source_id=page["id"],
+                payload=result,
+                status="ok",
+            )
         else:
             # Find GHL contact ID — check extracted data first, then DB xref
             ghl_contact_id = page.get("ghl_contact_id", "")
@@ -227,6 +301,14 @@ async def run_notion_ghl_sync(
             if not ghl_contact_id:
                 result["action"] = "skipped_no_xref"
                 result["error"] = "No GHL contact ID found for this Notion page"
+                # Bug 2: Log skip to sync_log
+                await _write_sync_log(
+                    event_type="appointment.sync",
+                    source_id=page["id"],
+                    payload=result,
+                    status="skipped",
+                    error_detail="No GHL contact ID (no xref)",
+                )
                 results.append(result)
                 continue
 
@@ -243,8 +325,22 @@ async def run_notion_ghl_sync(
                         "Phone updated in GHL for %s (contact %s) → %s",
                         page["name"], ghl_contact_id, notion_phone,
                     )
+                    # Bug 2: Log phone update
+                    await _write_sync_log(
+                        event_type="phone.updated",
+                        source_id=page["id"],
+                        target_id=ghl_contact_id,
+                        payload={"phone": notion_phone},
+                        status="ok",
+                    )
 
-                # Push appointment — append only, never remove existing data
+                # Sync timezone from Notion to GHL
+                tz_result = await _sync_timezone_if_changed(
+                    ghl_contact_id, page_raw.get("properties", {})
+                )
+                result["timezone_sync"] = tz_result
+
+                # Push appointment (with upsert dedup — Bug 1 fix in ghl.py)
                 appt_result = await ghl.upsert_appointment(
                     contact_id=ghl_contact_id,
                     start_time=appt_date_str,
@@ -254,6 +350,15 @@ async def run_notion_ghl_sync(
                 result["action"] = "created"
                 result["ghl_appointment_id"] = appt_result.get("id", "")
                 result["ghl_contact_id"] = ghl_contact_id
+
+                # Bug 2: Log successful appointment creation
+                await _write_sync_log(
+                    event_type="appointment.created",
+                    source_id=page["id"],
+                    target_id=f"ghl:{ghl_contact_id}|appt:{appt_result.get('id', '')}",
+                    payload=result,
+                    status="ok",
+                )
             except Exception as e:
                 result["action"] = "failed"
                 result["error"] = str(e)
@@ -261,8 +366,20 @@ async def run_notion_ghl_sync(
                     "Failed to push appointment for %s: %s",
                     page["name"], e,
                 )
+                # Bug 2: Log failure
+                await _write_sync_log(
+                    event_type="appointment.sync",
+                    source_id=page["id"],
+                    target_id=ghl_contact_id,
+                    payload=result,
+                    status="error",
+                    error_detail=str(e),
+                )
 
         results.append(result)
+
+        # Bug 6: Rate limit — 334ms between Notion operations (~3 req/s)
+        await asyncio.sleep(0.334)
 
     # Log summary
     if results:
@@ -274,6 +391,95 @@ async def run_notion_ghl_sync(
             logger.info("  %s", r)
 
     return results
+
+
+async def _handle_cancellation(
+    page: Dict[str, Any],
+    dry_run: bool,
+) -> Optional[Dict[str, Any]]:
+    """Bug 4 fix: Handle pages that had Appointment Date removed (cancellation).
+
+    Looks up the GHL contact and cancels their appointments.
+    """
+    result: Dict[str, Any] = {
+        "notion_page_id": page["id"],
+        "name": page["name"],
+        "phone": page["phone"],
+        "appointment_date": "(cancelled)",
+    }
+
+    ghl_contact_id = page.get("ghl_contact_id", "")
+    if not ghl_contact_id:
+        # Try DB xref
+        try:
+            from db.database import _get_session_factory
+            from db.models import LeadXref
+            from sqlalchemy import select
+
+            async with _get_session_factory()() as session:
+                stmt = select(LeadXref).where(
+                    LeadXref.notion_page_id == page["id"]
+                )
+                row = await session.execute(stmt)
+                xref = row.scalar_one_or_none()
+                if xref:
+                    ghl_contact_id = xref.ghl_contact_id
+        except Exception:
+            pass
+
+    if not ghl_contact_id:
+        result["action"] = "skipped_no_xref"
+        return result
+
+    if dry_run:
+        result["action"] = "would_cancel"
+        result["dry_run"] = True
+        logger.info("[DRY RUN] Would cancel GHL appointments for %s", page["name"])
+        return result
+
+    try:
+        settings = get_settings()
+        existing = await ghl.get_contact_appointments(ghl_contact_id, settings.ghl_calendar_id)
+        cancelled_count = 0
+        for appt in existing:
+            appt_status = (appt.get("appointmentStatus") or appt.get("status") or "").lower()
+            if appt_status in ("cancelled", "deleted"):
+                continue
+            appt_id = appt.get("id", "")
+            if appt_id:
+                await ghl.cancel_appointment(appt_id)
+                cancelled_count += 1
+
+        result["action"] = "cancelled"
+        result["cancelled_count"] = cancelled_count
+        result["ghl_contact_id"] = ghl_contact_id
+
+        await _write_sync_log(
+            event_type="appointment.cancelled_from_notion",
+            source_id=page["id"],
+            target_id=ghl_contact_id,
+            payload=result,
+            status="ok",
+        )
+
+        logger.info(
+            "Cancelled %d GHL appointments for %s (Notion date removed)",
+            cancelled_count, page["name"],
+        )
+    except Exception as e:
+        result["action"] = "cancel_failed"
+        result["error"] = str(e)
+        logger.error("Failed to cancel appointments for %s: %s", page["name"], e)
+        await _write_sync_log(
+            event_type="appointment.cancel_failed",
+            source_id=page["id"],
+            target_id=ghl_contact_id,
+            payload=result,
+            status="error",
+            error_detail=str(e),
+        )
+
+    return result
 
 
 async def sync_loop():

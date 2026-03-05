@@ -63,6 +63,9 @@ async def upsert_lead(
 ) -> str:
     """Create or update a lead page in the Notion leads database.
 
+    Bug 7 fix: On update, reads existing Aggregate Comments first
+    and merges/preserves them instead of overwriting.
+
     Searches for an existing page by phone; creates if not found.
     Returns the Notion page ID.
     """
@@ -75,9 +78,15 @@ async def upsert_lead(
     existing = await _find_page_by_phone(db_id, phone)
     if existing:
         page_id = existing
-        props = _build_properties(lead, ghl_contact_id, age, lage_months)
+
+        # Bug 7: Read existing Aggregate Comments before building properties
+        existing_comments = await _read_aggregate_comments(page_id)
+        props = _build_properties(
+            lead, ghl_contact_id, age, lage_months,
+            existing_comments=existing_comments,
+        )
         await update_page(page_id, props)
-        logger.info("Notion updated existing page %s", page_id)
+        logger.info("Notion updated existing page %s (dupe: %s)", page_id, lead.get("phone", ""))
         return page_id
 
     # Create new page
@@ -97,6 +106,23 @@ async def upsert_lead(
         page_id = resp.json()["id"]
         logger.info("Notion created new page %s", page_id)
         return page_id
+
+
+async def _read_aggregate_comments(page_id: str) -> str:
+    """Bug 7 helper: Read existing Aggregate Comments from a Notion page."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{NOTION_BASE}/pages/{page_id}",
+                headers=_headers(),
+            )
+            resp.raise_for_status()
+            props = resp.json().get("properties", {})
+            comments_items = props.get("Aggregate Comments", {}).get("rich_text", [])
+            return "".join(item.get("plain_text", "") for item in comments_items) if comments_items else ""
+    except Exception as e:
+        logger.warning("Failed to read Aggregate Comments for %s: %s", page_id, e)
+        return ""
 
 
 async def _find_page_by_phone(database_id: str, phone: str) -> Optional[str]:
@@ -130,12 +156,36 @@ def _build_properties(
     ghl_contact_id: str,
     age: Optional[int] = None,
     lage_months: Optional[int] = None,
+    existing_comments: str = "",
 ) -> Dict[str, Any]:
     """Build Notion page properties from a lead dict.
+
+    Bug 7 fix: When existing_comments is provided (update path), preserves
+    existing content and merges the GHL ID + notes instead of overwriting.
 
     Uses real Notion DB property names and types.
     """
     full_name = f"{lead.get('first_name', '')} {lead.get('last_name', '')}".strip()
+
+    # Bug 7: Build Aggregate Comments with merge logic
+    new_ghl_ref = f"GHL:{ghl_contact_id}" if ghl_contact_id else ""
+    if existing_comments:
+        # Check if GHL ID is already in existing comments
+        if ghl_contact_id and f"GHL:{ghl_contact_id}" in existing_comments:
+            # GHL ID already present — preserve existing comments entirely
+            comment_text = existing_comments
+        elif ghl_contact_id and "GHL:" in existing_comments:
+            # Different GHL ID exists — update the ID portion but keep notes
+            import re
+            comment_text = re.sub(r"GHL:[^\s|]+", f"GHL:{ghl_contact_id}", existing_comments, count=1)
+        elif ghl_contact_id:
+            # No GHL ID yet — prepend it
+            comment_text = f"GHL:{ghl_contact_id} | {existing_comments}"
+        else:
+            # No new GHL ID — preserve existing
+            comment_text = existing_comments
+    else:
+        comment_text = new_ghl_ref
 
     props: Dict[str, Any] = {
         # title
@@ -144,9 +194,9 @@ def _build_properties(
         },
         # phone_number
         "Mobile Phone": {"phone_number": lead.get("phone", "")},
-        # rich_text — cross-reference ID
+        # rich_text — cross-reference ID (Bug 7: merged, not overwritten)
         "Aggregate Comments": {
-            "rich_text": [{"text": {"content": f"GHL:{ghl_contact_id}"}}]
+            "rich_text": [{"text": {"content": comment_text[:2000]}}]
         },
     }
 
@@ -237,15 +287,25 @@ async def update_page(page_id: str, properties: Dict[str, Any]) -> None:
 async def get_upcoming_appointments(days: int = 90) -> List[Dict[str, Any]]:
     """Query Notion for leads with Appointment Date in the next N days.
 
+    Bug 8 fix: Actually applies upper bound based on the `days` parameter.
     Returns pages tagged with _event_type="appointment".
     """
     settings = get_settings()
     today = datetime.now(timezone.utc).date()
+    end_date = today + timedelta(days=days)
 
     payload = {
         "filter": {
-            "property": "Appointment Date",
-            "date": {"on_or_after": today.isoformat()},
+            "and": [
+                {
+                    "property": "Appointment Date",
+                    "date": {"on_or_after": today.isoformat()},
+                },
+                {
+                    "property": "Appointment Date",
+                    "date": {"on_or_before": end_date.isoformat()},
+                },
+            ]
         },
         "page_size": 100,
     }
@@ -332,6 +392,58 @@ async def poll_recent_changes(minutes: int = 6) -> List[Dict[str, Any]]:
         page for page in results
         if _date_value(page.get("properties", {}).get("Appointment Date", {}))
     ]
+
+
+async def poll_recent_changes_no_appointment(minutes: int = 6) -> List[Dict[str, Any]]:
+    """Bug 4 fix: Poll for recently modified pages WITHOUT Appointment Date.
+
+    These may be leads whose appointment was cancelled (date removed in Notion).
+    Only returns pages that have a GHL Contact ID in Aggregate Comments,
+    indicating they previously had a sync relationship.
+    """
+    settings = get_settings()
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+
+    payload = {
+        "filter": {
+            "and": [
+                {
+                    "timestamp": "last_edited_time",
+                    "last_edited_time": {
+                        "on_or_after": cutoff.isoformat(),
+                    },
+                },
+                {
+                    "property": "Appointment Date",
+                    "date": {"is_empty": True},
+                },
+            ]
+        },
+        "sorts": [
+            {"timestamp": "last_edited_time", "direction": "descending"}
+        ],
+        "page_size": 50,
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{NOTION_BASE}/databases/{settings.notion_leads_db_id}/query",
+            headers=_headers(),
+            json=payload,
+        )
+        resp.raise_for_status()
+        results = resp.json().get("results", [])
+
+    # Only return pages that have a GHL Contact ID (they were previously synced)
+    filtered = []
+    for page in results:
+        props = page.get("properties", {})
+        comments_items = props.get("Aggregate Comments", {}).get("rich_text", [])
+        comments = "".join(item.get("plain_text", "") for item in comments_items) if comments_items else ""
+        if "GHL:" in comments:
+            filtered.append(page)
+
+    return filtered
 
 
 # --- Property extractors ---

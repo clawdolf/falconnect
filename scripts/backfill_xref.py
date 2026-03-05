@@ -126,6 +126,9 @@ def notion_headers() -> Dict[str, str]:
 async def fetch_all_notion_pages() -> Dict[str, str]:
     """Fetch ALL pages from the Notion leads DB and build phone → page_id map.
 
+    Bug 3 fix: Normalizes ALL phone numbers to E.164 before matching.
+    Also checks Home Phone and Spouse Phone fields for additional matches.
+
     Uses paginated query (100 per page, ~60 API calls for 6000 pages).
     Returns dict: { normalized_phone: notion_page_id }
     """
@@ -158,21 +161,27 @@ async def fetch_all_notion_pages() -> Dict[str, str]:
                 page_id = page.get("id", "")
                 props = page.get("properties", {})
 
-                # Mobile Phone is phone_number type
-                mp_prop = props.get("Mobile Phone", {})
-                raw_phone = ""
-                if mp_prop.get("type") == "phone_number":
-                    raw_phone = mp_prop.get("phone_number") or ""
-                elif mp_prop.get("type") == "rich_text":
-                    # Fallback if property type is rich_text
-                    texts = mp_prop.get("rich_text", [])
-                    raw_phone = "".join(t.get("plain_text", "") for t in texts)
+                # Check all phone fields for maximum matching
+                phone_fields = ["Mobile Phone", "Home Phone", "Spouse Phone"]
+                found_phone = False
 
-                if raw_phone and page_id:
-                    normalized = normalize_phone(str(raw_phone))
-                    if normalized:
-                        phone_map[normalized] = page_id
-                        pages_with_phone += 1
+                for field_name in phone_fields:
+                    prop = props.get(field_name, {})
+                    raw_phone = ""
+                    if prop.get("type") == "phone_number":
+                        raw_phone = prop.get("phone_number") or ""
+                    elif prop.get("type") == "rich_text":
+                        texts = prop.get("rich_text", [])
+                        raw_phone = "".join(t.get("plain_text", "") for t in texts)
+
+                    if raw_phone and page_id:
+                        # Bug 3 fix: Normalize to E.164 consistently
+                        normalized = normalize_phone(str(raw_phone))
+                        if normalized and normalized not in phone_map:
+                            phone_map[normalized] = page_id
+                            if not found_phone:
+                                pages_with_phone += 1
+                                found_phone = True
 
             has_more = data.get("has_more", False)
             start_cursor = data.get("next_cursor")
@@ -187,8 +196,8 @@ async def fetch_all_notion_pages() -> Dict[str, str]:
             await asyncio.sleep(0.35)
 
     logger.info(
-        "Notion fetch complete: %d total pages, %d with valid phone, %d API calls",
-        total_pages, pages_with_phone, api_call,
+        "Notion fetch complete: %d total pages, %d with valid phone, %d phone entries in map, %d API calls",
+        total_pages, pages_with_phone, len(phone_map), api_call,
     )
     return phone_map
 
