@@ -10,6 +10,10 @@ function SyncManagement() {
   const [dryRunLoading, setDryRunLoading] = useState(false)
   const [dryRunError, setDryRunError] = useState(null)
 
+  const [liveResults, setLiveResults] = useState(null)
+  const [liveLoading, setLiveLoading] = useState(false)
+  const [liveError, setLiveError] = useState(null)
+
   let getToken = null
   try {
     const auth = useAuth()
@@ -64,6 +68,27 @@ function SyncManagement() {
       setDryRunError(err.message)
     } finally {
       setDryRunLoading(false)
+    }
+  }
+
+  const runLiveSync = async () => {
+    if (!window.confirm('This will WRITE to GHL. Appointments will be created/updated. Continue?')) return
+    setLiveLoading(true)
+    setLiveError(null)
+    setLiveResults(null)
+    try {
+      const headers = await getHeaders()
+      const resp = await fetch('/api/sync/notion-to-ghl/live', {
+        method: 'POST',
+        headers,
+      })
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`)
+      const data = await resp.json()
+      setLiveResults(data)
+    } catch (err) {
+      setLiveError(err.message)
+    } finally {
+      setLiveLoading(false)
     }
   }
 
@@ -181,6 +206,70 @@ function SyncManagement() {
                       <td>{r.appointment_date}</td>
                       <td>
                         <span className={`badge ${r.dry_run ? 'badge-info' : 'badge-success'}`}>
+                          {r.action}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              </div>
+            ) : (
+              <p className="no-results">No appointments found matching criteria.</p>
+            )}
+          </div>
+        )}
+      </section>
+
+      {/* Live Sync — Bug 10 fix */}
+      <section className="section">
+        <h2 className="section-title">Notion → GHL Sync (Live)</h2>
+        <p className="section-desc">
+          Push appointments to GHL for real. This creates/updates actual calendar events.
+        </p>
+
+        <button
+          className="btn btn-primary"
+          style={{ backgroundColor: '#dc2626' }}
+          onClick={runLiveSync}
+          disabled={liveLoading}
+        >
+          {liveLoading ? 'Syncing...' : 'Run Live Sync'}
+        </button>
+
+        {liveError && (
+          <div className="alert alert-error">
+            <strong>Error:</strong> {liveError}
+          </div>
+        )}
+
+        {liveResults && (
+          <div style={{ marginTop: '1rem' }}>
+            <div className="results-meta">
+              <span>Mode: <strong><span className="badge badge-error">LIVE</span></strong></span>
+              <span>After date: <strong>{liveResults.sync_after_date}</strong></span>
+              <span>Processed: <strong>{liveResults.appointments_found}</strong> appointments</span>
+            </div>
+
+            {liveResults.results && liveResults.results.length > 0 ? (
+              <div className="table-scroll-wrapper">
+              <table className="results-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Phone</th>
+                    <th>Appointment Date</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {liveResults.results.map((r, idx) => (
+                    <tr key={idx}>
+                      <td>{r.name}</td>
+                      <td>{r.phone}</td>
+                      <td>{r.appointment_date}</td>
+                      <td>
+                        <span className={`badge ${r.action === 'created' ? 'badge-success' : r.action === 'failed' ? 'badge-error' : 'badge-warn'}`}>
                           {r.action}
                         </span>
                       </td>

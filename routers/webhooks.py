@@ -141,7 +141,10 @@ async def _handle_appointment_booked(payload: GHLWebhookPayload, notion_page_id:
 
 
 async def _handle_appointment_updated(payload: GHLWebhookPayload, notion_page_id: str):
-    """Update Notion appointment date if changed."""
+    """Update Notion appointment date if changed.
+
+    Bug 9 fix: If status is cancelled, clear Appointment Date and add cancellation note.
+    """
     properties: dict = {}
     if payload.startTime:
         properties["Appointment Date"] = {
@@ -151,6 +154,21 @@ async def _handle_appointment_updated(payload: GHLWebhookPayload, notion_page_id
         status_name = payload.status.lower()
         if "cancelled" in status_name or "canceled" in status_name:
             properties["Lead Status"] = {"status": {"name": "Not Interested/Lost"}}
+            # Bug 9: Clear the Appointment Date
+            properties["Appointment Date"] = {"date": None}
+            # Bug 9: Add cancellation note to Aggregate Comments
+            try:
+                from datetime import datetime, timezone as tz
+                cancel_date = datetime.now(tz.utc).strftime("%Y-%m-%d")
+                # Read existing comments first to preserve them
+                existing_page = await _get_page_comments(notion_page_id)
+                cancel_note = f" | Appointment cancelled {cancel_date} via GHL"
+                new_comments = (existing_page + cancel_note)[:2000] if existing_page else cancel_note.strip(" | ")
+                properties["Aggregate Comments"] = {
+                    "rich_text": [{"text": {"content": new_comments}}]
+                }
+            except Exception as e:
+                logger.warning("Failed to add cancellation note: %s", e)
         elif "no_show" in status_name or "noshow" in status_name:
             properties["Opportunity Stage"] = {"status": {"name": "No Show"}}
     if properties:
@@ -159,12 +177,28 @@ async def _handle_appointment_updated(payload: GHLWebhookPayload, notion_page_id
 
 
 async def _handle_appointment_cancelled(payload: GHLWebhookPayload, notion_page_id: str):
-    """Clear appointment date and update status."""
-    await notion.update_page(
-        notion_page_id,
-        {"Lead Status": {"status": {"name": "Not Interested/Lost"}}},
-    )
-    logger.info("Appointment cancelled → Notion %s updated", notion_page_id)
+    """Bug 9 fix: Clear Appointment Date, update status, and add cancellation note."""
+    from datetime import datetime, timezone as tz
+    cancel_date = datetime.now(tz.utc).strftime("%Y-%m-%d")
+
+    properties = {
+        "Lead Status": {"status": {"name": "Not Interested/Lost"}},
+        "Appointment Date": {"date": None},  # Bug 9: Clear the date
+    }
+
+    # Add cancellation note to Aggregate Comments
+    try:
+        existing_comments = await _get_page_comments(notion_page_id)
+        cancel_note = f" | Appointment cancelled {cancel_date} via GHL"
+        new_comments = (existing_comments + cancel_note)[:2000] if existing_comments else cancel_note.strip(" | ")
+        properties["Aggregate Comments"] = {
+            "rich_text": [{"text": {"content": new_comments}}]
+        }
+    except Exception as e:
+        logger.warning("Failed to add cancellation note: %s", e)
+
+    await notion.update_page(notion_page_id, properties)
+    logger.info("Appointment cancelled → Notion %s updated (date cleared)", notion_page_id)
 
 
 async def _handle_appointment_no_show(payload: GHLWebhookPayload, notion_page_id: str):
@@ -220,6 +254,31 @@ async def _handle_contact_opted_out(payload: GHLWebhookPayload, notion_page_id: 
         {"Lead Status": {"status": {"name": "Invalid"}}},
     )
     logger.info("Contact opted out → Invalid → Notion %s", notion_page_id)
+
+
+async def _get_page_comments(notion_page_id: str) -> str:
+    """Read existing Aggregate Comments from a Notion page (Bug 7/9 helper)."""
+    import httpx
+    from config import get_settings
+
+    settings = get_settings()
+    headers = {
+        "Authorization": f"Bearer {settings.notion_token}",
+        "Notion-Version": "2022-06-28",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"https://api.notion.com/v1/pages/{notion_page_id}",
+                headers=headers,
+            )
+            resp.raise_for_status()
+            props = resp.json().get("properties", {})
+            comments_items = props.get("Aggregate Comments", {}).get("rich_text", [])
+            return "".join(item.get("plain_text", "") for item in comments_items) if comments_items else ""
+    except Exception as e:
+        logger.warning("Failed to read Aggregate Comments for %s: %s", notion_page_id, e)
+        return ""
 
 
 # Handler registry

@@ -60,25 +60,50 @@ async def _seed_licenses_if_empty() -> None:
 
 
 async def _dedup_licenses() -> None:
-    """Remove duplicate license rows (same user_id + state_abbreviation). Keeps newest."""
+    """Clean up stale/duplicate license rows. Removes rows from old user IDs and deduplicates."""
     from sqlalchemy import text
     try:
         from db.database import _get_session_factory as _sf
+        canonical_uid = os.environ.get("CLERK_ADMIN_USER_ID", "user_3ASrwDOrSTaDxCus6f1B5lnDsgz")
+
+        # Known stale user IDs from past bugs
+        OLD_UIDS = [
+            "72dc5b7c-ba2c-4a1d-83b9-733ff600c0d5",  # FC v3 UUID
+            "user_3ASljZWeTNVAOMGP62n87Eq0GG9",        # Old dev mode hardcoded
+        ]
+
         async with _sf()() as session:
+            total_deleted = 0
+
+            # Delete rows belonging to old/stale user IDs where canonical ID already has that state
+            for old_uid in OLD_UIDS:
+                if old_uid == canonical_uid:
+                    continue
+                result = await session.execute(text(
+                    "DELETE FROM licenses WHERE user_id = :old_uid "
+                    "AND state_abbreviation IN ("
+                    "  SELECT state_abbreviation FROM licenses WHERE user_id = :canonical_uid"
+                    ")"
+                ), {"old_uid": old_uid, "canonical_uid": canonical_uid})
+                total_deleted += result.rowcount
+
+            # General dedup: keep newest row per (user_id, state_abbreviation)
             result = await session.execute(text(
                 "DELETE FROM licenses WHERE id IN ("
                 "  SELECT id FROM ("
-                "    SELECT id, ROW_NUMBER() OVER (PARTITION BY user_id, state_abbreviation ORDER BY id DESC) AS rn"
-                "    FROM licenses"
+                "    SELECT id, ROW_NUMBER() OVER ("
+                "      PARTITION BY user_id, state_abbreviation ORDER BY id DESC"
+                "    ) AS rn FROM licenses"
                 "  ) ranked WHERE rn > 1"
                 ")"
             ))
-            deleted = result.rowcount
-            if deleted:
+            total_deleted += result.rowcount
+
+            if total_deleted:
                 await session.commit()
-                logger.info("Dedup: removed %d duplicate license rows", deleted)
+                logger.info("License cleanup: removed %d stale/duplicate rows", total_deleted)
     except Exception as exc:
-        logger.warning("License dedup failed (non-fatal): %s", exc)
+        logger.warning("License cleanup failed (non-fatal): %s", exc)
 
 
 async def lifespan(app: FastAPI):
