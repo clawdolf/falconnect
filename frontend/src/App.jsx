@@ -350,7 +350,7 @@ function UserMenu() {
         <div
           style={{
             position: 'absolute',
-            top: '36px',
+            bottom: '36px',
             right: 0,
             minWidth: 200,
             maxWidth: 'calc(100vw - 2rem)',
