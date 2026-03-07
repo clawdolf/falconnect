@@ -46,18 +46,18 @@ function CustomSignIn() {
   const [loading, setLoading] = useState(false)
   const [step, setStep] = useState('password') // 'password' | 'otp'
 
-  async function handleAppleSignIn() {
+  async function handleOAuthSignIn(strategy) {
     if (!isLoaded) return
     setError('')
     setLoading(true)
     try {
       await signIn.authenticateWithRedirect({
-        strategy: 'oauth_apple',
+        strategy,
         redirectUrl: '/sso-callback',
         redirectUrlComplete: '/',
       })
     } catch (err) {
-      const msg = err?.errors?.[0]?.longMessage || err?.errors?.[0]?.message || 'Apple sign-in failed.'
+      const msg = err?.errors?.[0]?.longMessage || err?.errors?.[0]?.message || 'Sign-in failed.'
       setError(msg)
       setLoading(false)
     }
@@ -240,7 +240,39 @@ function CustomSignIn() {
 
       <button
         type="button"
-        onClick={handleAppleSignIn}
+        onClick={() => handleOAuthSignIn('oauth_google')}
+        disabled={loading}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '0.5rem',
+          background: '#fff',
+          color: '#3c4043',
+          border: '1px solid var(--border)',
+          borderRadius: 4,
+          padding: '0.6rem 1rem',
+          fontFamily: 'var(--font-mono)',
+          fontSize: '0.72rem',
+          letterSpacing: '0.05em',
+          cursor: 'pointer',
+          touchAction: 'manipulation',
+          marginBottom: '0.5rem',
+        }}
+      >
+        <svg width="16" height="16" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+          <path fill="#4285F4" d="M47.5 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h13.2c-.6 3-2.3 5.5-4.9 7.2v6h7.9c4.6-4.2 7.3-10.5 7.3-17.2z"/>
+          <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.9-6c-2.1 1.4-4.9 2.3-8 2.3-6.1 0-11.3-4.1-13.2-9.7H2.6v6.2C6.5 42.8 14.7 48 24 48z"/>
+          <path fill="#FBBC05" d="M10.8 28.8c-.5-1.4-.7-2.8-.7-4.3s.2-3 .7-4.3v-6.2H2.6C1 17.1 0 20.4 0 24s1 6.9 2.6 9.9l8.2-6.1z"/>
+          <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.5l6.7-6.7C35.9 2.4 30.4 0 24 0 14.7 0 6.5 5.2 2.6 14.1l8.2 6.2C12.7 13.6 17.9 9.5 24 9.5z"/>
+        </svg>
+        SIGN IN WITH GOOGLE
+      </button>
+
+      <button
+        type="button"
+        onClick={() => handleOAuthSignIn('oauth_apple')}
         disabled={loading}
         style={{
           width: '100%',
@@ -278,19 +310,21 @@ function UserMenu() {
   const [open, setOpen] = useState(false)
   const [showProfile, setShowProfile] = useState(false)
   const menuRef = useRef(null)
+  const btnRef = useRef(null)
+  const [dropdownPos, setDropdownPos] = useState({ bottom: 0, left: 0 })
 
   const hasApple = user?.externalAccounts?.some(a => a.provider === 'apple')
+  const hasGoogle = user?.externalAccounts?.some(a => a.provider === 'google')
 
-  async function connectApple() {
+  async function connectOAuth(strategy) {
     try {
       await user.createExternalAccount({
-        strategy: 'oauth_apple',
+        strategy,
         redirectUrl: `${window.location.origin}/sso-callback`,
         additionalScopes: ['email', 'name'],
       })
     } catch (err) {
-      console.error('Apple connect failed', err)
-      alert('Apple connection failed. Try signing out and signing back in with Apple.')
+      console.error('OAuth connect failed', err)
     }
   }
 
@@ -304,6 +338,18 @@ function UserMenu() {
     if (open) document.addEventListener('mousedown', handleOutsideClick)
     return () => document.removeEventListener('mousedown', handleOutsideClick)
   }, [open])
+
+  // Compute dropdown position from button's viewport coords
+  function handleToggle() {
+    if (!open && btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect()
+      setDropdownPos({
+        bottom: window.innerHeight - rect.top + 8,
+        left: rect.left,
+      })
+    }
+    setOpen((o) => !o)
+  }
 
   // Derive initials or fallback
   const name = user?.fullName || user?.firstName || 'Seb'
@@ -320,7 +366,8 @@ function UserMenu() {
     <div ref={menuRef} style={{ position: 'relative', display: 'inline-block' }}>
       {/* Avatar trigger */}
       <button
-        onClick={() => setOpen((o) => !o)}
+        ref={btnRef}
+        onClick={handleToggle}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -347,20 +394,20 @@ function UserMenu() {
         )}
       </button>
 
-      {/* Dropdown */}
+      {/* Dropdown — fixed position to escape sidebar overflow clipping */}
       {open && (
         <div
           style={{
-            position: 'absolute',
-            bottom: '36px',
-            right: 0,
+            position: 'fixed',
+            bottom: dropdownPos.bottom,
+            left: dropdownPos.left,
             minWidth: 200,
             maxWidth: 'calc(100vw - 2rem)',
             background: 'var(--surface)',
             border: '1px solid var(--border)',
             borderRadius: 4,
             boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
-            zIndex: 9000,
+            zIndex: 9999,
             padding: '0.75rem',
           }}
         >
@@ -424,26 +471,30 @@ function UserMenu() {
 
           <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '0.5rem 0' }} />
 
+          {/* Connect Google (if not yet linked) */}
+          {!hasGoogle && (
+            <button
+              onClick={() => connectOAuth('oauth_google')}
+              style={{ width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: '0.72rem', color: 'var(--text-muted)', padding: '0.25rem 0', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '0.4rem', touchAction: 'manipulation' }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--text)' }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-muted)' }}
+            >
+              <svg width="12" height="12" viewBox="0 0 48 48"><path fill="#4285F4" d="M47.5 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h13.2c-.6 3-2.3 5.5-4.9 7.2v6h7.9c4.6-4.2 7.3-10.5 7.3-17.2z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.9-6c-2.1 1.4-4.9 2.3-8 2.3-6.1 0-11.3-4.1-13.2-9.7H2.6v6.2C6.5 42.8 14.7 48 24 48z"/><path fill="#FBBC05" d="M10.8 28.8c-.5-1.4-.7-2.8-.7-4.3s.2-3 .7-4.3v-6.2H2.6C1 17.1 0 20.4 0 24s1 6.9 2.6 9.9l8.2-6.1z"/><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.5l6.7-6.7C35.9 2.4 30.4 0 24 0 14.7 0 6.5 5.2 2.6 14.1l8.2 6.2C12.7 13.6 17.9 9.5 24 9.5z"/></svg>
+              Connect Google
+            </button>
+          )}
+          {hasGoogle && (
+            <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.62rem', color: 'var(--text-muted)', margin: 0, padding: '0.25rem 0', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <svg width="12" height="12" viewBox="0 0 48 48"><path fill="#4285F4" d="M47.5 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h13.2c-.6 3-2.3 5.5-4.9 7.2v6h7.9c4.6-4.2 7.3-10.5 7.3-17.2z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.9-6c-2.1 1.4-4.9 2.3-8 2.3-6.1 0-11.3-4.1-13.2-9.7H2.6v6.2C6.5 42.8 14.7 48 24 48z"/><path fill="#FBBC05" d="M10.8 28.8c-.5-1.4-.7-2.8-.7-4.3s.2-3 .7-4.3v-6.2H2.6C1 17.1 0 20.4 0 24s1 6.9 2.6 9.9l8.2-6.1z"/><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.5l6.7-6.7C35.9 2.4 30.4 0 24 0 14.7 0 6.5 5.2 2.6 14.1l8.2 6.2C12.7 13.6 17.9 9.5 24 9.5z"/></svg>
+              Google linked
+            </p>
+          )}
+
           {/* Connect Apple (if not yet linked) */}
           {!hasApple && (
             <button
-              onClick={connectApple}
-              style={{
-                width: '100%',
-                textAlign: 'left',
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                fontFamily: 'var(--font-mono)',
-                fontSize: '0.72rem',
-                color: 'var(--text-muted)',
-                padding: '0.25rem 0',
-                letterSpacing: '0.05em',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.4rem',
-                touchAction: 'manipulation',
-              }}
+              onClick={() => connectOAuth('oauth_apple')}
+              style={{ width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: '0.72rem', color: 'var(--text-muted)', padding: '0.25rem 0', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '0.4rem', touchAction: 'manipulation' }}
               onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--text)' }}
               onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-muted)' }}
             >
@@ -451,9 +502,8 @@ function UserMenu() {
               Connect Apple ID
             </button>
           )}
-
           {hasApple && (
-            <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.62rem', color: 'var(--text-muted)', margin: '0 0 0.25rem', padding: '0.25rem 0', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.62rem', color: 'var(--text-muted)', margin: 0, padding: '0.25rem 0', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
               <svg width="12" height="12" viewBox="0 0 814 1000" fill="currentColor"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76 0-103.7 40.8-165.9 40.8s-105-57.8-155.5-127.4C46 411.6 8.1 251.9 8.1 99.5c0-89.9 30.8-182.6 87.7-247.2C150.3-201.4 225.4-240 306.6-240c81.2 0 132.7 53.8 196.7 53.8 61.9 0 99.9-53.8 189.8-53.8 72.3 0 141 32.5 194.4 88.3zm-234-181.4c31.1-36.9 53.1-88.1 53.1-139.3 0-7.1-.6-14.3-1.9-20.1-50.6 1.9-110.8 33.7-147.1 75.8-28.5 32.4-55.1 83.6-55.1 135.5 0 7.8 1.3 15.6 1.9 18.1 3.2.6 8.4 1.3 13.6 1.3 45.4 0 102.5-30.4 135.5-71.3z"/></svg>
               Apple ID linked
             </p>
