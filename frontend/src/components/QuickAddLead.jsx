@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useAuth } from '@clerk/clerk-react'
 
 function QuickAddLead() {
   const [open, setOpen] = useState(false)
@@ -8,14 +9,11 @@ function QuickAddLead() {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null) // { ok: bool, message: str }
 
-  let getToken = null
-  try { const { useAuth } = require('@clerk/clerk-react'); getToken = useAuth().getToken } catch { /* no-op */ }
+  const { getToken } = useAuth()
 
   async function authHeaders() {
     const h = { 'Content-Type': 'application/json' }
-    if (getToken) {
-      try { const t = await getToken(); if (t) h['Authorization'] = 'Bearer ' + t } catch { /* no-op */ }
-    }
+    try { const t = await getToken(); if (t) h['Authorization'] = 'Bearer ' + t } catch { /* no-op */ }
     return h
   }
 
