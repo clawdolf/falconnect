@@ -4,6 +4,7 @@ import {
   VENDOR_TIERS, NEEDS_LEAD_AGE, LEAD_AGE_BUCKETS, LEAD_TYPES, LEAD_VENDORS,
   LEAD_FIELDS, STEP_LABELS, autoMapHeaders, autoDetectVendor, buildLeads,
 } from '../utils/leadImportUtils'
+import QuickAddLead from './QuickAddLead'
 
 /* ── Main Component ── */
 function LeadImport() {
@@ -272,9 +273,12 @@ function LeadImport() {
           {fileName && step !== 'source' && step !== 'results' && (
             <span className="wizard-filename">{fileName}</span>
           )}
-          {step !== 'source' && step !== 'importing' && (
-            <button className="btn btn-sm" onClick={resetWizard} style={{ marginLeft: 'auto', padding: '0.2rem 0.6rem' }}>Start Over</button>
-          )}
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <QuickAddLead />
+            {step !== 'source' && step !== 'importing' && (
+              <button className="btn btn-sm" onClick={resetWizard} style={{ padding: '0.2rem 0.6rem' }}>Start Over</button>
+            )}
+          </div>
         </div>
 
         {/* Step indicator */}
