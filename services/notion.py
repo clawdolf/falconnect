@@ -84,6 +84,7 @@ async def upsert_lead(
         props = _build_properties(
             lead, ghl_contact_id, age, lage_months,
             existing_comments=existing_comments,
+            is_create=False,  # Don't overwrite Call In Date on update
         )
         await update_page(page_id, props)
         logger.info("Notion updated existing page %s (dupe: %s)", page_id, lead.get("phone", ""))
@@ -151,12 +152,31 @@ async def _find_page_by_phone(database_id: str, phone: str) -> Optional[str]:
     return None
 
 
+def _parse_date_flexible(val) -> Optional[str]:
+    """Parse a date value to YYYY-MM-DD string. Handles date objects, isoformat strings,
+    and common vendor formats (M/D/YY, M/D/YYYY). Returns None if unparseable."""
+    if not val:
+        return None
+    if hasattr(val, "isoformat"):
+        return val.isoformat()[:10]
+    s = str(val).strip()
+    if not s:
+        return None
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%m-%d-%Y", "%m-%d-%y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    return None
+
+
 def _build_properties(
     lead: Dict[str, Any],
     ghl_contact_id: str,
     age: Optional[int] = None,
     lage_months: Optional[int] = None,
     existing_comments: str = "",
+    is_create: bool = True,
 ) -> Dict[str, Any]:
     """Build Notion page properties from a lead dict.
 
@@ -226,9 +246,27 @@ def _build_properties(
     if lead.get("zip_code"):
         props["ZIP Code"] = {"rich_text": [{"text": {"content": lead["zip_code"]}}]}
 
-    # State (select)
+    # State (select) — normalize full names to 2-letter codes (matches old import script)
     if lead.get("state"):
-        props["State"] = {"select": {"name": lead["state"]}}
+        _state_raw = str(lead["state"]).strip()
+        _state_map = {
+            "arizona": "AZ", "california": "CA", "pennsylvania": "PA", "maine": "ME",
+            "new york": "NY", "texas": "TX", "florida": "FL", "ohio": "OH",
+            "illinois": "IL", "georgia": "GA", "michigan": "MI", "washington": "WA",
+            "oregon": "OR", "colorado": "CO", "nevada": "NV", "utah": "UT",
+            "new mexico": "NM", "idaho": "ID", "montana": "MT", "wyoming": "WY",
+            "north carolina": "NC", "south carolina": "SC", "alabama": "AL",
+            "mississippi": "MS", "louisiana": "LA", "tennessee": "TN", "kentucky": "KY",
+            "indiana": "IN", "iowa": "IA", "minnesota": "MN", "wisconsin": "WI",
+            "missouri": "MO", "kansas": "KS", "oklahoma": "OK", "virginia": "VA",
+            "west virginia": "WV", "maryland": "MD", "district of columbia": "DC",
+            "dc": "DC", "delaware": "DE", "new jersey": "NJ", "connecticut": "CT",
+            "rhode island": "RI", "massachusetts": "MA", "vermont": "VT",
+            "new hampshire": "NH", "alaska": "AK", "hawaii": "HI", "arkansas": "AR",
+            "nebraska": "NE", "south dakota": "SD", "north dakota": "ND",
+        }
+        state_norm = _state_map.get(_state_raw.lower(), _state_raw.upper()[:2])
+        props["State"] = {"select": {"name": state_norm}}
 
     # Age (number)
     if age is not None:
@@ -271,15 +309,15 @@ def _build_properties(
     if lead.get("tier"):
         props["Tier"] = {"select": {"name": lead["tier"]}}
 
-    # LPD — Lead Purchase Date (date) — when Seb bought the leads
+    # LPD — Lead Purchase Date (date) — normalize to YYYY-MM-DD
     if lead.get("lpd"):
-        lpd_val = lead["lpd"]
-        if hasattr(lpd_val, "isoformat"):
-            lpd_val = lpd_val.isoformat()
-        props["LPD"] = {"date": {"start": str(lpd_val)}}
+        lpd_parsed = _parse_date_flexible(lead["lpd"])
+        if lpd_parsed:
+            props["LPD"] = {"date": {"start": lpd_parsed}}
 
-    # Call In Date — always set to today on create
-    props["Call In Date"] = {"date": {"start": datetime.now().strftime("%Y-%m-%d")}}
+    # Call In Date — set to today, but only on CREATE (not update)
+    if is_create:
+        props["Call In Date"] = {"date": {"start": datetime.now().strftime("%Y-%m-%d")}}
 
     # Best Time to Call (rich_text)
     if lead.get("best_time_to_call"):
@@ -295,20 +333,19 @@ def _build_properties(
             "rich_text": [{"text": {"content": gender_norm}}]
         }
 
-    # DOB (date) — full date of birth
+    # DOB (date) — normalize to YYYY-MM-DD (Notion rejects non-ISO dates)
     if lead.get("dob"):
-        dob_val = lead["dob"]
-        if hasattr(dob_val, "isoformat"):
-            dob_val = dob_val.isoformat()
-        props["DOB"] = {"date": {"start": str(dob_val)}}
+        dob_parsed = _parse_date_flexible(lead["dob"])
+        if dob_parsed:
+            props["DOB"] = {"date": {"start": dob_parsed}}
 
-    # Home Phone (phone_number)
+    # Home Phone (phone_number) — skip if empty/None (Notion rejects null)
     if lead.get("home_phone"):
-        props["Home Phone"] = {"phone_number": lead["home_phone"]}
+        props["Home Phone"] = {"phone_number": str(lead["home_phone"])}
 
-    # Spouse Cell (phone_number)
+    # Spouse Cell (phone_number) — skip if empty/None
     if lead.get("spouse_phone"):
-        props["Spouse Cell"] = {"phone_number": lead["spouse_phone"]}
+        props["Spouse Cell"] = {"phone_number": str(lead["spouse_phone"])}
 
     # Lender (rich_text)
     if lead.get("lender"):
