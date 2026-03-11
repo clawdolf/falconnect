@@ -8,6 +8,7 @@ export const VENDOR_TIERS = {
   'Proven Leads': ['N/A'],
   'Aria Leads': ['Gold', 'Silver', 'N/A'],
   'MilMo': ['Gold', 'Silver', 'N/A'],
+  'Cheryl': ['Gold', 'Silver', 'N/A'],
 }
 
 export const NEEDS_LEAD_AGE = {
@@ -15,6 +16,7 @@ export const NEEDS_LEAD_AGE = {
   'Proven Leads': true,
   'Aria Leads': true,
   'MilMo': true,
+  'Cheryl': true,
 }
 
 export const LEAD_AGE_BUCKETS = ['7\u201312M', '13\u201324M', '25\u201336M', '37\u201348M', '49\u201360M', '60+M']
