@@ -287,10 +287,12 @@ def _build_properties(
             "rich_text": [{"text": {"content": str(lead["best_time_to_call"])[:2000]}}]
         }
 
-    # Gender (rich_text)
+    # Gender (rich_text) — normalize to M/F like old import script
     if lead.get("gender"):
+        _g = str(lead["gender"]).strip().lower()
+        gender_norm = "M" if _g in {"m", "male", "man"} else "F" if _g in {"f", "female", "woman"} else str(lead["gender"]).strip()
         props["Gender"] = {
-            "rich_text": [{"text": {"content": str(lead["gender"])}}]
+            "rich_text": [{"text": {"content": gender_norm}}]
         }
 
     # DOB (date) — full date of birth
