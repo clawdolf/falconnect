@@ -25,15 +25,15 @@ NOTION_BASE = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
 
 # Map LAge months to the select options in the Notion DB
+# Uses exclusive upper bound (low <= months < high) to avoid boundary overlap
 LAGE_BRACKETS = [
-    (0, 3, "3+ Month"),
-    (3, 7, "3+ Month"),
-    (7, 12, "7-12M"),
-    (13, 24, "13–24M"),
-    (25, 36, "25–36M"),
-    (37, 48, "37–48M"),
-    (49, 60, "49–60M"),
-    (60, 9999, "60+M"),
+    (0,  7,    "3+ Month"),   # 0–6 months
+    (7,  13,   "7-12M"),      # 7–12 months
+    (13, 25,   "13–24M"),
+    (25, 37,   "25–36M"),
+    (37, 49,   "37–48M"),
+    (49, 61,   "49–60M"),
+    (61, 9999, "60+M"),
 ]
 
 
@@ -42,7 +42,7 @@ def _lage_select(months: Optional[int]) -> Optional[str]:
     if months is None:
         return None
     for low, high, label in LAGE_BRACKETS:
-        if low <= months <= high:
+        if low <= months < high:
             return label
     return "60+M"
 
