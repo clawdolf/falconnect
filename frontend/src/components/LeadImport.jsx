@@ -1,372 +1,257 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useMemo } from 'react'
 import * as XLSX from 'xlsx'
 import {
   VENDOR_TIERS, NEEDS_LEAD_AGE, VENDOR_AGE_BUCKETS, LEAD_TYPES, LEAD_VENDORS,
   LEAD_FIELDS, STEP_LABELS, autoMapHeaders, autoDetectVendor, buildLeads,
+  isMappingValid, getMissingRequired,
 } from '../utils/leadImportUtils'
 import QuickAddLead from './QuickAddLead'
 
-/* ── Main Component ── */
 function LeadImport() {
-  // Wizard state
   const [step, setStep] = useState('source')
   const [sourceType, setSourceType] = useState(null)
   const fileInputRef = useRef(null)
   const [dragActive, setDragActive] = useState(false)
-  const [fileName, setFileName] = useState('')
   const [sheetUrl, setSheetUrl] = useState('')
   const [sheetLoading, setSheetLoading] = useState(false)
-  const [headers, setHeaders] = useState([])
-  const [parsedRows, setParsedRows] = useState([])
+  const [fileQueue, setFileQueue] = useState([])
   const [columnMap, setColumnMap] = useState({})
-  const [vendor, setVendor] = useState('HOFLeads')
-  const [tier, setTier] = useState('Diamond')
-  const [leadType, setLeadType] = useState('Mortgage Protection')
-  const [leadAge, setLeadAge] = useState('')
-  const [purchaseDate, setPurchaseDate] = useState('')
-  const [progress, setProgress] = useState({ current: 0, total: 0 })
-  const [result, setResult] = useState(null)
+  const [initialAutoMap, setInitialAutoMap] = useState({})
+  const [applyMappingToAll, setApplyMappingToAll] = useState(true)
+  const [mappingWarning, setMappingWarning] = useState('')
+  const [headers, setHeaders] = useState([])
+  const [sampleRow, setSampleRow] = useState([])
+  const [progress, setProgress] = useState({ current: 0, total: 0, fileIndex: 0, fileName: '' })
   const [error, setError] = useState(null)
   const [dryRun, setDryRun] = useState(false)
   const [testMode, setTestMode] = useState(false)
+  const [grandResult, setGrandResult] = useState(null)
+  const [previewTab, setPreviewTab] = useState(0)
 
-  // Auth (Clerk)
   let getToken = null
-  try { const { useAuth } = require('@clerk/clerk-react'); const auth = useAuth(); getToken = auth.getToken } catch { /* no-op */ }
+  try { const { useAuth } = require('@clerk/clerk-react'); const auth = useAuth(); getToken = auth.getToken } catch {}
 
-  const getHeaders = async () => {
+  const getAuthHeaders = async () => {
     const h = { 'Content-Type': 'application/json' }
-    if (getToken) {
-      try {
-        const t = await getToken()
-        if (t) h['Authorization'] = 'Bearer ' + t
-      } catch { /* no-op */ }
-    }
+    if (getToken) { try { const t = await getToken(); if (t) h['Authorization'] = 'Bearer ' + t } catch {} }
     return h
   }
-
-  // BUG 2 FIX: Get Google OAuth token from Clerk for Sheets API
   const getGoogleToken = async () => {
     if (!getToken) return null
-    try {
-      const t = await getToken({ template: 'google' })
-      return t || null
-    } catch {
-      return null
-    }
+    try { const t = await getToken({ template: 'google' }); return t || null } catch { return null }
   }
 
   const resetWizard = () => {
-    setStep('source'); setSourceType(null); setFileName('')
-    setHeaders([]); setParsedRows([]); setColumnMap({})
-    setVendor('HOFLeads'); setTier('Diamond'); setLeadType('Mortgage Protection')
-    setLeadAge(''); setPurchaseDate(''); setResult(null); setError(null)
-    setSheetUrl(''); setSheetLoading(false)
+    setStep('source'); setSourceType(null); setFileQueue([]); setHeaders([]); setSampleRow([])
+    setColumnMap({}); setInitialAutoMap({}); setApplyMappingToAll(true); setMappingWarning('')
+    setError(null); setGrandResult(null); setSheetUrl(''); setSheetLoading(false); setPreviewTab(0)
+    setProgress({ current: 0, total: 0, fileIndex: 0, fileName: '' })
   }
 
-  const parseFile = async (file) => {
-    setError(null)
+  const parseOneFile = async (file) => {
     const ext = file.name.split('.').pop().toLowerCase()
-    if (!['csv', 'xlsx', 'xls', 'tsv'].includes(ext)) { setError('Unsupported file type.'); return }
+    if (!['csv', 'xlsx', 'xls', 'tsv'].includes(ext)) throw new Error('Unsupported: .' + ext)
+    const data = await file.arrayBuffer()
+    const wb = XLSX.read(data, { type: 'array' })
+    const sheet = wb.Sheets[wb.SheetNames[0]]
+    const json = XLSX.utils.sheet_to_json(sheet, { header: 1 })
+    if (json.length < 2) throw new Error('"' + file.name + '" appears empty.')
+    const hdrs = json[0].map(h => String(h || '').trim())
+    const rows = json.slice(1).filter(r => r.some(c => c !== null && c !== undefined && c !== ''))
+    return { headers: hdrs, parsedRows: rows, sampleRow: rows[0] || [] }
+  }
+
+  const handleFiles = async (files) => {
+    setError(null)
+    const fileList = Array.from(files).filter(f => ['csv','xlsx','xls','tsv'].includes(f.name.split('.').pop().toLowerCase()))
+    if (!fileList.length) { setError('No supported files selected.'); return }
     try {
-      const data = await file.arrayBuffer()
-      const wb = XLSX.read(data, { type: 'array' })
-      const sheet = wb.Sheets[wb.SheetNames[0]]
-      const json = XLSX.utils.sheet_to_json(sheet, { header: 1 })
-      if (json.length < 2) { setError('File appears empty.'); return }
-      const hdrs = json[0].map(h => String(h || '').trim())
-      const rows = json.slice(1).filter(r => r.some(c => c !== null && c !== undefined && c !== ''))
-      setHeaders(hdrs); setParsedRows(rows); setColumnMap(autoMapHeaders(hdrs))
-      setFileName(file.name)
-      const det = autoDetectVendor(file.name)
-      setVendor(det.vendor); setTier(det.tier); setLeadType(det.leadType)
-      setStep('mapping')
+      const newQueue = []
+      for (const file of fileList) {
+        const { headers: hdrs, parsedRows: rows, sampleRow: sample } = await parseOneFile(file)
+        const det = autoDetectVendor(file.name)
+        newQueue.push({ file, name: file.name, vendor: det.vendor, tier: det.tier, leadType: det.leadType, leadAge: '', purchaseDate: '', status: 'pending', result: null, headers: hdrs, parsedRows: rows, sampleRow: sample })
+      }
+      setFileQueue(newQueue)
+      if (newQueue.length > 0) {
+        setHeaders(newQueue[0].headers); setSampleRow(newQueue[0].sampleRow)
+        const autoMap = autoMapHeaders(newQueue[0].headers)
+        setColumnMap(autoMap); setInitialAutoMap({ ...autoMap })
+      }
+      setStep('fileConfig')
     } catch (err) { setError('Parse error: ' + err.message) }
   }
 
-  const handleDrag = useCallback((e) => {
-    e.preventDefault(); e.stopPropagation()
-    setDragActive(e.type === 'dragenter' || e.type === 'dragover')
-  }, [])
+  const handleDrag = useCallback((e) => { e.preventDefault(); e.stopPropagation(); setDragActive(e.type === 'dragenter' || e.type === 'dragover') }, [])
+  const handleDrop = useCallback((e) => { e.preventDefault(); e.stopPropagation(); setDragActive(false); if (e.dataTransfer.files?.length) handleFiles(e.dataTransfer.files) }, [])
 
-  const handleDrop = useCallback((e) => {
-    e.preventDefault(); e.stopPropagation(); setDragActive(false)
-    if (e.dataTransfer.files?.[0]) parseFile(e.dataTransfer.files[0])
-  }, [])
-
-  // BUG 1 + 2 FIX: Use correct route (/api/sheets/data) and send X-Google-Token header
   const fetchSheet = async () => {
     const m = sheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/); const id = m ? m[1] : sheetUrl.trim()
     if (!id) { setError('Enter a valid Sheets URL or ID'); return }
     setSheetLoading(true); setError(null)
     try {
-      const hdrs = await getHeaders()
-      // BUG 2: Get Google OAuth token and send as X-Google-Token header
+      const hdrs = await getAuthHeaders()
       const googleToken = await getGoogleToken()
-      if (googleToken) {
-        hdrs['X-Google-Token'] = googleToken
-      }
-      // BUG 1 FIX: Use /api/sheets/data (matching backend mount point)
+      if (googleToken) hdrs['X-Google-Token'] = googleToken
       const resp = await fetch('/api/sheets/data?sheet_id=' + encodeURIComponent(id), { headers: hdrs })
-      if (resp.status === 400 && !googleToken) {
-        setError('Google Sheets requires signing in with Google. Sign out and sign in with your Google account, or export as CSV and use file upload.')
-        return
-      }
-      if (resp.status === 404 || resp.status === 501) {
-        setError('Google Sheets API not configured. Export as CSV and use file upload.')
-        return
-      }
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}))
-        throw new Error(body.detail || 'Could not fetch sheet data.')
-      }
+      if (resp.status === 400 && !googleToken) { setError('Google Sheets requires signing in with Google.'); return }
+      if (resp.status === 404 || resp.status === 501) { setError('Google Sheets API not configured. Export as CSV.'); return }
+      if (!resp.ok) { const body = await resp.json().catch(() => ({})); throw new Error(body.detail || 'Could not fetch sheet data.') }
       const data = await resp.json()
-      setHeaders(data.headers || []); setParsedRows(data.rows || []); setColumnMap(autoMapHeaders(data.headers || []))
-      setFileName(data.sheet_title || 'Google Sheet'); setStep('mapping')
-    } catch (err) { setError(err.message) }
-    finally { setSheetLoading(false) }
+      const sheetHdrs = data.headers || []; const sheetRows = data.rows || []
+      const autoMap = autoMapHeaders(sheetHdrs)
+      setFileQueue([{ file: null, name: data.sheet_title || 'Google Sheet', vendor: 'HOFLeads', tier: 'Diamond', leadType: 'Mortgage Protection', leadAge: '', purchaseDate: '', status: 'pending', result: null, headers: sheetHdrs, parsedRows: sheetRows, sampleRow: sheetRows[0] || [] }])
+      setHeaders(sheetHdrs); setSampleRow(sheetRows[0] || []); setColumnMap(autoMap); setInitialAutoMap({ ...autoMap }); setStep('fileConfig')
+    } catch (err) { setError(err.message) } finally { setSheetLoading(false) }
   }
 
-  // mappingOk: need at least one phone field AND at least name coverage
-  // Phone: accepts phone, mobile_phone, or home_phone
-  // Name: accepts (first_name + last_name) OR full_name
-  const _mappedVals = Object.values(columnMap)
-  const mappingOk = (
-    (_mappedVals.includes('phone') || _mappedVals.includes('mobile_phone') || _mappedVals.includes('home_phone')) &&
-    ((_mappedVals.includes('first_name') && _mappedVals.includes('last_name')) || _mappedVals.includes('full_name'))
-  )
+  const updateFileQueueItem = (index, updates) => setFileQueue(prev => prev.map((item, i) => i === index ? { ...item, ...updates } : item))
+  const removeFromQueue = (index) => {
+    setFileQueue(prev => {
+      const next = prev.filter((_, i) => i !== index)
+      if (index === 0 && next.length > 0) {
+        setHeaders(next[0].headers); setSampleRow(next[0].sampleRow)
+        const autoMap = autoMapHeaders(next[0].headers); setColumnMap(autoMap); setInitialAutoMap({ ...autoMap })
+      }
+      return next
+    })
+  }
 
-  // BUG 11 FIX: Use authenticated endpoint /api/leads/bulk instead of /api/public/leads/bulk
+  const mappingOk = isMappingValid(columnMap)
+  const sortedHeaders = useMemo(() => [...headers].sort((a, b) => (columnMap[b] ? 1 : 0) - (columnMap[a] ? 1 : 0)), [headers, columnMap])
+  const headerIndexMap = useMemo(() => { const m = {}; headers.forEach((h, i) => { m[h] = i }); return m }, [headers])
+
   const doImport = async () => {
-    const { leads, droppedCount } = buildLeads(parsedRows, headers, columnMap, vendor, tier, leadType, leadAge, purchaseDate)
-    if (!leads.length) { setError('No valid leads. Ensure required fields are mapped.'); return }
-    setStep('importing'); setError(null); setProgress({ current: 0, total: leads.length })
-    const hdrs = await getHeaders()
-    const BS = 50
-    let created = 0, updated = 0, failed = 0
-    const errors = []
-    const ghlWarnings = []
-
-    for (let i = 0; i < leads.length; i += BS) {
-      const batch = leads.slice(i, i + BS)
-      try {
-        // BUG 11 FIX: Authenticated endpoint
-        const resp = await fetch('/api/leads/bulk', {
-          method: 'POST',
-          headers: hdrs,
-          body: JSON.stringify({ leads: batch, dry_run: dryRun, test_mode: testMode })
-        })
-        if (resp.ok) {
-          const d = await resp.json()
-          created += d.created || 0
-          updated += d.updated || 0
-          failed += d.failed || 0
-          if (d.errors) errors.push(...d.errors)
-          if (d.ghl_warnings) ghlWarnings.push(...d.ghl_warnings)
-        } else {
-          // If bulk fails, try individual
-          for (const l of batch) {
-            try {
-              const r = await fetch('/api/leads/capture', {
-                method: 'POST',
-                headers: hdrs,
-                body: JSON.stringify(l)
-              })
-              if (r.ok) created++
-              else failed++
-            } catch { failed++ }
+    setStep('importing'); setError(null)
+    let totalLeads = 0
+    for (const fq of fileQueue) { totalLeads += buildLeads(fq.parsedRows, fq.headers, columnMap, fq.vendor, fq.tier, fq.leadType, fq.leadAge, fq.purchaseDate).leads.length }
+    setProgress({ current: 0, total: totalLeads, fileIndex: 0, fileName: fileQueue[0]?.name || '' })
+    const authHdrs = await getAuthHeaders()
+    const BS = 100
+    let grandCreated = 0, grandFailed = 0, grandDropped = 0, processedLeads = 0
+    const grandErrors = [], grandGhlWarnings = []
+    for (let fi = 0; fi < fileQueue.length; fi++) {
+      const fq = fileQueue[fi]
+      updateFileQueueItem(fi, { status: 'importing' })
+      setProgress(prev => ({ ...prev, fileIndex: fi, fileName: fq.name }))
+      const { leads, droppedCount } = buildLeads(fq.parsedRows, fq.headers, columnMap, fq.vendor, fq.tier, fq.leadType, fq.leadAge, fq.purchaseDate)
+      grandDropped += droppedCount
+      if (!leads.length) { updateFileQueueItem(fi, { status: 'done', result: { created: 0, failed: 0, ghlWarnings: [], droppedCount } }); continue }
+      let fileCreated = 0, fileFailed = 0; const fileGhlWarnings = [], fileErrors = []
+      for (let i = 0; i < leads.length; i += BS) {
+        const batch = leads.slice(i, i + BS)
+        try {
+          const resp = await fetch('/api/leads/bulk', { method: 'POST', headers: authHdrs, body: JSON.stringify({ leads: batch, dry_run: dryRun, test_mode: testMode }) })
+          if (resp.ok) {
+            const d = await resp.json(); fileCreated += d.created || 0; fileFailed += d.failed || 0
+            if (d.errors) fileErrors.push(...d.errors); if (d.ghl_warnings) fileGhlWarnings.push(...d.ghl_warnings)
+          } else {
+            for (const l of batch) { try { const r = await fetch('/api/leads/capture', { method: 'POST', headers: authHdrs, body: JSON.stringify(l) }); if (r.ok) fileCreated++; else fileFailed++ } catch { fileFailed++ } }
           }
-        }
-      } catch { failed += batch.length }
-      setProgress({ current: Math.min(i + BS, leads.length), total: leads.length })
-      // Small delay between batches to avoid rate limiting
-      if (i + BS < leads.length) await new Promise(r => setTimeout(r, 100))
+        } catch { fileFailed += batch.length }
+        processedLeads += batch.length
+        setProgress(prev => ({ ...prev, current: Math.min(processedLeads, totalLeads) }))
+        if (i + BS < leads.length) await new Promise(r => setTimeout(r, 100))
+      }
+      updateFileQueueItem(fi, { status: fileFailed > 0 && fileCreated === 0 ? 'error' : 'done', result: { created: fileCreated, failed: fileFailed, ghlWarnings: fileGhlWarnings, errors: fileErrors, droppedCount } })
+      grandCreated += fileCreated; grandFailed += fileFailed; grandErrors.push(...fileErrors); grandGhlWarnings.push(...fileGhlWarnings)
+      if (fi + 1 < fileQueue.length) await new Promise(r => setTimeout(r, 200))
     }
-    setResult({ created, updated, failed, errors, ghlWarnings, droppedCount }); setStep('results')
-  }
-
-  const retryFailed = async () => {
-    if (!result?.errors?.length) return
-    // Rebuild only the failed leads from parsedRows by index
-    const failedIndices = new Set(result.errors.map(e => e.index))
-    const { leads: failedLeads } = buildLeads(
-      parsedRows.filter((_, i) => failedIndices.has(i)),
-      headers, columnMap, vendor, tier, leadType, leadAge, purchaseDate
-    )
-    if (!failedLeads.length) { setError('No retryable leads.'); return }
-    setStep('importing'); setError(null); setProgress({ current: 0, total: failedLeads.length })
-    const hdrs = await getHeaders()
-    let created = 0, failed = 0; const errors = []; const ghlWarnings = []
-    try {
-      const resp = await fetch('/api/leads/bulk', {
-        method: 'POST', headers: hdrs,
-        body: JSON.stringify({ leads: failedLeads, dry_run: dryRun, test_mode: testMode })
-      })
-      if (resp.ok) {
-        const d = await resp.json()
-        created = d.created || 0; failed = d.failed || 0
-        if (d.errors) errors.push(...d.errors)
-        if (d.ghl_warnings) ghlWarnings.push(...d.ghl_warnings)
-      } else { failed = failedLeads.length }
-    } catch { failed = failedLeads.length }
-    setProgress({ current: failedLeads.length, total: failedLeads.length })
-    setResult(prev => ({
-      ...prev,
-      created: (prev?.created || 0) + created,
-      failed,
-      errors,
-      ghlWarnings: [...(prev?.ghlWarnings || []), ...ghlWarnings],
-    }))
+    setGrandResult({ created: grandCreated, failed: grandFailed, errors: grandErrors, ghlWarnings: grandGhlWarnings, droppedCount: grandDropped })
     setStep('results')
   }
 
   const goBack = () => {
-    if (step === 'mapping') setStep(sourceType || 'source')
-    else if (step === 'metadata') setStep('mapping')
-    else if (step === 'preview') setStep('metadata')
+    if (step === 'fileConfig') setStep(sourceType || 'source')
+    else if (step === 'mapping') setStep('fileConfig')
+    else if (step === 'preview') setStep('mapping')
     else setStep('source')
   }
-
-  const previewData = step === 'preview'
-    ? buildLeads(parsedRows.slice(0, 5), headers, columnMap, vendor, tier, leadType, leadAge, purchaseDate)
-    : { leads: [], droppedCount: 0 }
-  const previewLeads = previewData.leads
-
-  // Full count for the preview summary
-  const fullBuildData = step === 'preview'
-    ? buildLeads(parsedRows, headers, columnMap, vendor, tier, leadType, leadAge, purchaseDate)
-    : { leads: [], droppedCount: 0 }
-
-  const stepFlow = ['mapping', 'metadata', 'preview', 'importing', 'results']
-  const stepIdx = stepFlow.indexOf(step)
-
-  const titleMap = {
-    source: 'Import Leads', file: 'Upload File', sheets: 'Google Sheets',
-    mapping: 'Map Columns', metadata: 'Lead Details',
-    preview: 'Review & Confirm', importing: 'Importing...', results: 'Import Complete',
+  const handleMappingNext = () => {
+    if (!mappingOk) { setMappingWarning('Required: First Name (or Full Name), Last Name, and Phone must be mapped.'); return }
+    setMappingWarning(''); setStep('preview')
   }
+
+  const previewDataByFile = useMemo(() => {
+    if (step !== 'preview') return []
+    return fileQueue.map(fq => {
+      const preview = buildLeads(fq.parsedRows.slice(0, 5), fq.headers, columnMap, fq.vendor, fq.tier, fq.leadType, fq.leadAge, fq.purchaseDate)
+      const full = buildLeads(fq.parsedRows, fq.headers, columnMap, fq.vendor, fq.tier, fq.leadType, fq.leadAge, fq.purchaseDate)
+      return { name: fq.name, previewLeads: preview.leads, totalLeads: full.leads.length, droppedCount: full.droppedCount, vendor: fq.vendor, tier: fq.tier, leadType: fq.leadType }
+    })
+  }, [step, fileQueue, columnMap])
+  const totalLeadsAcrossFiles = useMemo(() => previewDataByFile.reduce((s, f) => s + f.totalLeads, 0), [previewDataByFile])
+  const totalDroppedAcrossFiles = useMemo(() => previewDataByFile.reduce((s, f) => s + f.droppedCount, 0), [previewDataByFile])
+
+  const stepFlow = ['fileConfig', 'mapping', 'preview', 'importing', 'results']
+  const stepIdx = stepFlow.indexOf(step)
+  const titleMap = { source: 'Import Leads', file: 'Upload Files', sheets: 'Google Sheets', fileConfig: 'File Configuration', mapping: 'Map Columns', preview: 'Review & Confirm', importing: 'Importing...', results: 'Import Complete' }
 
   return (
     <div className="dashboard">
       <section className="section">
-        {/* Dry Run Toggle */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem', padding: '0.625rem 0.875rem', background: dryRun ? 'oklch(18% 0.06 85 / 0.6)' : 'var(--surface)', border: '1px solid ' + (dryRun ? 'var(--accent)' : 'var(--border)'), borderRadius: 3 }}>
-          <button
-            onClick={() => setDryRun(d => !d)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '0.5rem',
-              background: dryRun ? 'var(--accent)' : 'var(--bg)',
-              color: dryRun ? 'oklch(15% 0.01 85)' : 'var(--text-muted)',
-              border: '1px solid ' + (dryRun ? 'var(--accent)' : 'var(--border)'),
-              borderRadius: 3, padding: '0.3rem 0.75rem',
-              fontFamily: 'var(--font-display)', fontSize: '0.75rem', fontWeight: 700,
-              letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer',
-              transition: 'all 0.15s'
-            }}
-          >
-            <span style={{ width: 10, height: 10, borderRadius: '50%', background: dryRun ? 'oklch(15% 0.01 85)' : 'var(--border)', display: 'inline-block', transition: 'all 0.15s' }} />
+          <button onClick={() => setDryRun(d => !d)} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: dryRun ? 'var(--accent)' : 'var(--bg)', color: dryRun ? 'oklch(15% 0.01 85)' : 'var(--text-muted)', border: '1px solid ' + (dryRun ? 'var(--accent)' : 'var(--border)'), borderRadius: 3, padding: '0.3rem 0.75rem', fontFamily: 'var(--font-display)', fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' }}>
+            <span style={{ width: 10, height: 10, borderRadius: '50%', background: dryRun ? 'oklch(15% 0.01 85)' : 'var(--border)', display: 'inline-block' }} />
             {dryRun ? 'DRY RUN ON' : 'DRY RUN OFF'}
           </button>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: dryRun ? 'var(--accent)' : 'var(--text-muted)' }}>
-            {dryRun ? 'Wizard and menus work — no data will be sent to GHL or Notion' : 'Live mode — imports will write to GHL and Notion'}
-          </span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: dryRun ? 'var(--accent)' : 'var(--text-muted)' }}>{dryRun ? 'No data will be sent to GHL or Notion' : 'Live mode'}</span>
         </div>
-
-        {/* Test Mode Toggle */}
         {!dryRun && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem', padding: '0.625rem 0.875rem', background: testMode ? 'oklch(18% 0.04 200 / 0.6)' : 'var(--surface)', border: '1px solid ' + (testMode ? 'oklch(65% 0.15 200)' : 'var(--border)'), borderRadius: 3 }}>
-            <button
-              onClick={() => setTestMode(t => !t)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: '0.5rem',
-                background: testMode ? 'oklch(65% 0.15 200)' : 'var(--bg)',
-                color: testMode ? 'oklch(15% 0.01 200)' : 'var(--text-muted)',
-                border: '1px solid ' + (testMode ? 'oklch(65% 0.15 200)' : 'var(--border)'),
-                borderRadius: 3, padding: '0.3rem 0.75rem',
-                fontFamily: 'var(--font-display)', fontSize: '0.75rem', fontWeight: 700,
-                letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer',
-                transition: 'all 0.15s'
-              }}
-            >
-              <span style={{ width: 10, height: 10, borderRadius: '50%', background: testMode ? 'oklch(15% 0.01 200)' : 'var(--border)', display: 'inline-block', transition: 'all 0.15s' }} />
+            <button onClick={() => setTestMode(t => !t)} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: testMode ? 'oklch(65% 0.15 200)' : 'var(--bg)', color: testMode ? 'oklch(15% 0.01 200)' : 'var(--text-muted)', border: '1px solid ' + (testMode ? 'oklch(65% 0.15 200)' : 'var(--border)'), borderRadius: 3, padding: '0.3rem 0.75rem', fontFamily: 'var(--font-display)', fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' }}>
+              <span style={{ width: 10, height: 10, borderRadius: '50%', background: testMode ? 'oklch(15% 0.01 200)' : 'var(--border)', display: 'inline-block' }} />
               {testMode ? 'TEST MODE ON' : 'TEST MODE OFF'}
             </button>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: testMode ? 'oklch(65% 0.15 200)' : 'var(--text-muted)' }}>
-              {testMode ? 'Writes to Notion + GHL with Tier=TEST and test-import tag — easy to find and delete' : 'Production — normal import'}
-            </span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: testMode ? 'oklch(65% 0.15 200)' : 'var(--text-muted)' }}>{testMode ? 'Writes with Tier=TEST tag' : 'Production'}</span>
           </div>
         )}
-
-        {/* Header row */}
         <div className="section-header-row" style={{ marginBottom: '0.25rem' }}>
-          {step !== 'source' && step !== 'importing' && step !== 'results' && (
-            <button className="btn btn-sm" onClick={goBack} style={{ padding: '0.2rem 0.6rem' }}>&larr;</button>
-          )}
+          {step !== 'source' && step !== 'importing' && step !== 'results' && <button className="btn btn-sm" onClick={goBack} style={{ padding: '0.2rem 0.6rem' }}>&larr;</button>}
           <h2 className="section-title" style={{ margin: 0 }}>{titleMap[step]}</h2>
-          {fileName && step !== 'source' && step !== 'results' && (
-            <span className="wizard-filename">{fileName}</span>
-          )}
+          {fileQueue.length > 0 && step !== 'source' && step !== 'results' && <span className="wizard-filename">{fileQueue.length === 1 ? fileQueue[0].name : fileQueue.length + ' files'}</span>}
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <QuickAddLead />
-            {step !== 'source' && step !== 'importing' && (
-              <button className="btn btn-sm" onClick={resetWizard} style={{ padding: '0.2rem 0.6rem' }}>Start Over</button>
-            )}
+            {step !== 'source' && step !== 'importing' && <button className="btn btn-sm" onClick={resetWizard} style={{ padding: '0.2rem 0.6rem' }}>Start Over</button>}
           </div>
         </div>
-
-        {/* Step indicator */}
         {stepIdx >= 0 && (
           <div className="wizard-step-indicator">
             {stepFlow.map((s, i) => {
               const cur = s === step, done = i < stepIdx
-              return (
-                <span key={s} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                  <span style={{ width: 16, height: 16, borderRadius: '50%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.55rem', fontWeight: 600, background: cur ? 'var(--accent)' : done ? 'var(--green)' : 'var(--bg)', color: cur || done ? 'oklch(15% 0.01 85)' : 'var(--text-muted)', border: '1px solid ' + (cur ? 'var(--accent)' : done ? 'var(--green)' : 'var(--border)') }}>
-                    {done ? '✓' : i + 1}
-                  </span>
-                  <span style={{ color: cur ? 'var(--text)' : 'var(--text-muted)' }}>{STEP_LABELS[s] || s}</span>
-                  {i < stepFlow.length - 1 && <span style={{ margin: '0 0.25rem', color: 'var(--border)' }}>&mdash;</span>}
-                </span>
-              )
+              return (<span key={s} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                <span style={{ width: 16, height: 16, borderRadius: '50%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.55rem', fontWeight: 600, background: cur ? 'var(--accent)' : done ? 'var(--green)' : 'var(--bg)', color: cur || done ? 'oklch(15% 0.01 85)' : 'var(--text-muted)', border: '1px solid ' + (cur ? 'var(--accent)' : done ? 'var(--green)' : 'var(--border)') }}>{done ? '\u2713' : i + 1}</span>
+                <span style={{ color: cur ? 'var(--text)' : 'var(--text-muted)' }}>{STEP_LABELS[s] || s}</span>
+                {i < stepFlow.length - 1 && <span style={{ margin: '0 0.25rem', color: 'var(--border)' }}>&mdash;</span>}
+              </span>)
             })}
           </div>
         )}
-
         {error && <div className="alert alert-error" style={{ marginBottom: '1rem', fontSize: '0.75rem' }}>{error}</div>}
 
-        {/* SOURCE */}
         {step === 'source' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem', maxWidth: 480 }}>
             <button onClick={() => { setSourceType('file'); setStep('file') }} className="btn" style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '1rem 1.25rem', textAlign: 'left', height: 'auto' }}>
-              <div style={{ width: 40, height: 40, background: 'oklch(18% 0.04 85)', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent)', fontSize: '1.25rem', fontWeight: 700, flexShrink: 0 }}>↑</div>
-              <div>
-                <div style={{ fontFamily: 'var(--font-display)', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text)' }}>Upload File</div>
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--text-muted)' }}>CSV, Excel (.xlsx, .xls), TSV</div>
-              </div>
+              <div style={{ width: 40, height: 40, background: 'oklch(18% 0.04 85)', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent)', fontSize: '1.25rem', fontWeight: 700, flexShrink: 0 }}>{'\u2191'}</div>
+              <div><div style={{ fontFamily: 'var(--font-display)', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text)' }}>Upload Files</div><div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--text-muted)' }}>CSV, Excel {'\u2014'} multiple files supported</div></div>
             </button>
             <button onClick={() => { setSourceType('sheets'); setStep('sheets') }} className="btn" style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '1rem 1.25rem', textAlign: 'left', height: 'auto' }}>
               <div style={{ width: 40, height: 40, background: 'oklch(18% 0.04 145)', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--green)', fontSize: '1.25rem', fontWeight: 700, flexShrink: 0 }}>G</div>
-              <div>
-                <div style={{ fontFamily: 'var(--font-display)', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text)' }}>Google Sheets</div>
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--text-muted)' }}>Import from a shared spreadsheet</div>
-              </div>
+              <div><div style={{ fontFamily: 'var(--font-display)', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text)' }}>Google Sheets</div><div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--text-muted)' }}>Import from a shared spreadsheet</div></div>
             </button>
           </div>
         )}
 
-        {/* FILE UPLOAD */}
         {step === 'file' && (
-          <div onDragEnter={handleDrag} onDragLeave={handleDrag} onDragOver={handleDrag} onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
-            style={{ border: '2px dashed ' + (dragActive ? 'var(--accent)' : 'var(--border)'), borderRadius: 3, padding: '4rem 2rem', textAlign: 'center', cursor: 'pointer', background: dragActive ? 'oklch(14% 0.015 85 / 0.1)' : 'var(--bg)', transition: 'all 0.15s', maxWidth: 560 }}>
-            <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls,.tsv" onChange={e => { if (e.target.files?.[0]) parseFile(e.target.files[0]); e.target.value = '' }} style={{ display: 'none' }} />
-            <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem', color: 'var(--text-muted)' }}>↑</div>
-            <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--text)', marginBottom: '0.375rem' }}>Drop file here or click to browse</p>
-            <p className="form-hint">CSV, Excel (.xlsx, .xls), TSV</p>
+          <div onDragEnter={handleDrag} onDragLeave={handleDrag} onDragOver={handleDrag} onDrop={handleDrop} onClick={() => fileInputRef.current?.click()}
+            style={{ border: '2px dashed ' + (dragActive ? 'var(--accent)' : 'var(--border)'), borderRadius: 3, padding: '4rem 2rem', textAlign: 'center', cursor: 'pointer', background: dragActive ? 'oklch(14% 0.015 85 / 0.1)' : 'var(--bg)', maxWidth: 560 }}>
+            <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls,.tsv" multiple onChange={e => { if (e.target.files?.length) handleFiles(e.target.files); e.target.value = '' }} style={{ display: 'none' }} />
+            <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem', color: 'var(--text-muted)' }}>{'\u2191'}</div>
+            <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--text)', marginBottom: '0.375rem' }}>Drop files here or click to browse</p>
+            <p className="form-hint">CSV, Excel (.xlsx, .xls), TSV {'\u2014'} select multiple files</p>
           </div>
         )}
 
-        {/* GOOGLE SHEETS */}
         {step === 'sheets' && (
           <div style={{ maxWidth: 560 }}>
             <p className="form-hint" style={{ marginBottom: '0.75rem' }}>Paste a Google Sheets URL or spreadsheet ID.</p>
@@ -374,181 +259,209 @@ function LeadImport() {
               <input className="form-input" style={{ flex: 1 }} placeholder="https://docs.google.com/spreadsheets/d/..." value={sheetUrl} onChange={e => setSheetUrl(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') fetchSheet() }} />
               <button className="btn btn-primary" onClick={fetchSheet} disabled={!sheetUrl.trim() || sheetLoading}>{sheetLoading ? 'Loading...' : 'Fetch'}</button>
             </div>
-            <p className="form-hint" style={{ marginTop: '0.75rem' }}>Requires Google sign-in with Sheets access. Otherwise, export as CSV and use file upload.</p>
           </div>
         )}
 
-        {/* COLUMN MAPPING */}
+        {step === 'fileConfig' && (
+          <div>
+            <p className="form-hint" style={{ marginBottom: '0.75rem' }}>{fileQueue.length} file{fileQueue.length > 1 ? 's' : ''} loaded. Configure vendor details for each.</p>
+            <div style={{ maxHeight: 440, overflow: 'auto' }}>
+              <table className="results-table" style={{ fontSize: '0.75rem' }}>
+                <thead><tr><th>File</th><th>Rows</th><th>Vendor</th><th>Tier</th><th>Lead Type</th>{fileQueue.some(fq => NEEDS_LEAD_AGE[fq.vendor]) && <th>Age</th>}<th>Purchase Date</th>{fileQueue.length > 1 && <th></th>}</tr></thead>
+                <tbody>{fileQueue.map((fq, idx) => (
+                  <tr key={idx}>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={fq.name}>{fq.name}</td>
+                    <td>{fq.parsedRows.length}</td>
+                    <td><select className="form-input" style={{ fontSize: '0.7rem', padding: '0.2rem 0.4rem' }} value={fq.vendor} onChange={e => { const v = e.target.value; updateFileQueueItem(idx, { vendor: v, tier: (VENDOR_TIERS[v] || [])[0] || 'N/A' }) }}>{LEAD_VENDORS.map(v => <option key={v} value={v}>{v}</option>)}</select></td>
+                    <td><select className="form-input" style={{ fontSize: '0.7rem', padding: '0.2rem 0.4rem' }} value={fq.tier} onChange={e => updateFileQueueItem(idx, { tier: e.target.value })} disabled={fq.vendor === 'Proven Leads'}>{(VENDOR_TIERS[fq.vendor] || []).map(t => <option key={t} value={t}>{t}</option>)}</select></td>
+                    <td><select className="form-input" style={{ fontSize: '0.7rem', padding: '0.2rem 0.4rem' }} value={fq.leadType} onChange={e => updateFileQueueItem(idx, { leadType: e.target.value })}>{LEAD_TYPES.map(t => <option key={t} value={t}>{t}</option>)}</select></td>
+                    {fileQueue.some(f => NEEDS_LEAD_AGE[f.vendor]) && (<td>{NEEDS_LEAD_AGE[fq.vendor] ? (<select className="form-input" style={{ fontSize: '0.7rem', padding: '0.2rem 0.4rem' }} value={fq.leadAge} onChange={e => updateFileQueueItem(idx, { leadAge: e.target.value })}><option value="">N/A</option>{(VENDOR_AGE_BUCKETS[fq.vendor] || []).map(a => <option key={a} value={a}>{a}</option>)}</select>) : <span style={{ color: 'var(--text-muted)' }}>{'\u2014'}</span>}</td>)}
+                    <td><input className="form-input" type="date" style={{ fontSize: '0.7rem', padding: '0.2rem 0.4rem' }} value={fq.purchaseDate} onChange={e => updateFileQueueItem(idx, { purchaseDate: e.target.value })} /></td>
+                    {fileQueue.length > 1 && <td><button className="btn btn-sm" onClick={() => removeFromQueue(idx)} style={{ padding: '0.15rem 0.4rem', fontSize: '0.65rem', color: 'var(--red)' }}>{'\u2715'}</button></td>}
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+              <button className="btn btn-primary" onClick={() => setStep('mapping')} disabled={fileQueue.length === 0}>Next {'\u2192'}</button>
+            </div>
+          </div>
+        )}
+
         {step === 'mapping' && (
           <div>
-            <p className="form-hint" style={{ marginBottom: '0.75rem' }}>{parsedRows.length} rows detected. Map columns to lead fields.</p>
-            {!mappingOk && (
+            <p className="form-hint" style={{ marginBottom: '0.75rem' }}>Mapping columns from: <strong>{fileQueue[0]?.name}</strong> ({fileQueue[0]?.parsedRows.length} rows)</p>
+            {fileQueue.length > 1 && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                <input type="checkbox" checked={applyMappingToAll} onChange={e => setApplyMappingToAll(e.target.checked)} />
+                Apply this mapping to all {fileQueue.length} files
+              </label>
+            )}
+            {mappingWarning && (
+              <div style={{ background: 'oklch(18% 0.06 25)', border: '1px solid oklch(35% 0.15 25)', color: 'var(--red)', padding: '0.5rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.7rem', borderRadius: 2, marginBottom: '0.75rem' }}>{mappingWarning}</div>
+            )}
+            {!mappingOk && !mappingWarning && (
               <div style={{ background: 'oklch(18% 0.04 75)', border: '1px solid oklch(25% 0.05 75)', color: 'var(--amber)', padding: '0.5rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.7rem', borderRadius: 2, marginBottom: '0.75rem' }}>
-                Map at least First Name, Last Name, and Phone to continue.
+                Map at least First Name (or Full Name), Last Name, and Phone to continue.
               </div>
             )}
             <div style={{ maxHeight: 360, overflow: 'auto' }}>
-              {headers.map(h => (
-                <div key={h} className="column-map-row">
-                  <span className="column-map-label" title={h}>{h}</span>
-                  <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>→</span>
-                  <select className="form-input" style={{ flex: 1, fontSize: '0.75rem', padding: '0.25rem 0.5rem' }} value={columnMap[h] || ''} onChange={e => setColumnMap(prev => ({ ...prev, [h]: e.target.value }))}>
-                    <option value="">— skip —</option>
-                    {LEAD_FIELDS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
-                  </select>
-                  {columnMap[h] && <span className="badge badge-success" style={{ fontSize: '0.55rem' }}>mapped</span>}
-                </div>
-              ))}
+              {sortedHeaders.map(h => {
+                const colIdx = headerIndexMap[h]
+                const sampleVal = sampleRow[colIdx]
+                const isAutoMapped = initialAutoMap[h] && initialAutoMap[h] === columnMap[h]
+                return (
+                  <div key={h} className="column-map-row" style={{ background: isAutoMapped ? 'oklch(25% 0.05 145 / 0.3)' : 'transparent' }}>
+                    <span className="column-map-label" title={h}>{h}</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--text-muted)', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block' }} title={sampleVal != null ? String(sampleVal) : ''}>{sampleVal != null ? String(sampleVal) : ''}</span>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{'\u2192'}</span>
+                    <select className="form-input" style={{ flex: 1, fontSize: '0.75rem', padding: '0.25rem 0.5rem' }} value={columnMap[h] || ''} onChange={e => setColumnMap(prev => ({ ...prev, [h]: e.target.value }))}>
+                      <option value="">{'\u2014'} skip {'\u2014'}</option>
+                      {LEAD_FIELDS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+                    </select>
+                    {columnMap[h] && <span className="badge badge-success" style={{ fontSize: '0.55rem' }}>mapped</span>}
+                  </div>
+                )
+              })}
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
-              <button className="btn btn-primary" onClick={() => setStep('metadata')} disabled={!mappingOk}>Next →</button>
+              <button className="btn btn-primary" onClick={handleMappingNext} disabled={!mappingOk}>Next {'\u2192'}</button>
             </div>
           </div>
         )}
 
-        {/* METADATA */}
-        {step === 'metadata' && (
-          <div>
-            <p className="form-hint" style={{ marginBottom: '0.75rem' }}>Set batch-level metadata for all {parsedRows.length} leads.</p>
-            <div className="form-grid">
-              <div className="form-field">
-                <label className="form-label">Lead Vendor</label>
-                <select className="form-input" value={vendor} onChange={e => { setVendor(e.target.value); setTier((VENDOR_TIERS[e.target.value] || [])[0] || 'N/A') }}>
-                  {LEAD_VENDORS.map(v => <option key={v} value={v}>{v}</option>)}
-                </select>
-              </div>
-              <div className="form-field">
-                <label className="form-label">Tier</label>
-                <select className="form-input" value={tier} onChange={e => setTier(e.target.value)} disabled={vendor === 'Proven Leads'}>
-                  {(VENDOR_TIERS[vendor] || []).map(t => <option key={t} value={t}>{t}</option>)}
-                </select>
-              </div>
-              <div className="form-field">
-                <label className="form-label">Lead Type</label>
-                <select className="form-input" value={leadType} onChange={e => setLeadType(e.target.value)}>
-                  {LEAD_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                </select>
-              </div>
-              <div className="form-field">
-                <label className="form-label">Purchase Date</label>
-                <input className="form-input" type="date" value={purchaseDate} onChange={e => setPurchaseDate(e.target.value)} />
-              </div>
-            </div>
-            {NEEDS_LEAD_AGE[vendor] && (
-              <div className="form-field" style={{ marginTop: '0.75rem' }}>
-                <label className="form-label">Lead Age Bucket <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: '0.65rem' }}>(applied only to rows without their own value)</span></label>
-                <select className="form-input" value={leadAge} onChange={e => setLeadAge(e.target.value)}>
-                  <option value="">N/A</option>
-                  {(VENDOR_AGE_BUCKETS[vendor] || []).map(a => <option key={a} value={a}>{a}</option>)}
-                </select>
-              </div>
-            )}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem', gap: '0.5rem' }}>
-              <button className="btn btn-primary" onClick={() => setStep('preview')}>Review →</button>
-            </div>
-          </div>
-        )}
-
-        {/* PREVIEW */}
         {step === 'preview' && (
           <div>
             <div className="preview-summary">
               <div className="preview-summary-grid">
-                <span><strong style={{ color: 'var(--text)' }}>{fullBuildData.leads.length}</strong> leads to import</span>
-                {fullBuildData.droppedCount > 0 && (
-                  <span style={{ color: 'var(--amber)' }}><strong>{fullBuildData.droppedCount}</strong> rows dropped (missing name/phone)</span>
-                )}
-                <span>Source: <strong style={{ color: 'var(--text)' }}>{fileName}</strong></span>
-                <span>Vendor: <strong style={{ color: 'var(--text)' }}>{vendor} / {tier}</strong></span>
-                <span>Type: <strong style={{ color: 'var(--text)' }}>{leadType}</strong></span>
-                {purchaseDate && <span>Date: <strong style={{ color: 'var(--text)' }}>{purchaseDate}</strong></span>}
-                {leadAge && <span>Age: <strong style={{ color: 'var(--text)' }}>{leadAge}</strong></span>}
+                <span><strong style={{ color: 'var(--text)' }}>{totalLeadsAcrossFiles}</strong> leads to import across <strong>{fileQueue.length}</strong> file{fileQueue.length > 1 ? 's' : ''}</span>
+                {totalDroppedAcrossFiles > 0 && <span style={{ color: 'var(--amber)' }}><strong>{totalDroppedAcrossFiles}</strong> rows dropped (missing name/phone)</span>}
               </div>
             </div>
-            {previewLeads.length > 0 && (
-              <div className="table-scroll-wrapper" style={{ maxHeight: 240, marginBottom: '1rem' }}>
-                <table className="results-table">
-                  <thead><tr><th>#</th><th>Name</th><th>Phone</th><th>Email</th><th>Source</th><th>Type</th></tr></thead>
-                  <tbody>
-                    {previewLeads.map((l, i) => (
-                      <tr key={i}><td>{i + 1}</td><td>{l.first_name} {l.last_name}</td><td>{l.phone}</td><td>{l.email || '—'}</td><td>{l.lead_source || '—'}</td><td>{l.lead_type || '—'}</td></tr>
-                    ))}
-                  </tbody>
-                </table>
+            {fileQueue.length > 1 && (
+              <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+                {previewDataByFile.map((pf, i) => (
+                  <button key={i} className="btn btn-sm" onClick={() => setPreviewTab(i)} style={{ padding: '0.2rem 0.6rem', fontSize: '0.65rem', background: previewTab === i ? 'var(--accent)' : 'var(--bg)', color: previewTab === i ? 'oklch(15% 0.01 85)' : 'var(--text-muted)', border: '1px solid ' + (previewTab === i ? 'var(--accent)' : 'var(--border)') }}>
+                    {pf.name} ({pf.totalLeads})
+                  </button>
+                ))}
               </div>
             )}
-            <p className="form-hint">Showing first {previewLeads.length} of {fullBuildData.leads.length} leads. Write order: Notion first, then GHL.</p>
+            {previewDataByFile[previewTab] && (
+              <div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
+                  {previewDataByFile[previewTab].name} — {previewDataByFile[previewTab].vendor} / {previewDataByFile[previewTab].tier} — {previewDataByFile[previewTab].leadType}
+                </div>
+                {previewDataByFile[previewTab].previewLeads.length > 0 && (
+                  <div className="table-scroll-wrapper" style={{ maxHeight: 240, marginBottom: '1rem' }}>
+                    <table className="results-table">
+                      <thead><tr><th>#</th><th>Name</th><th>Phone</th><th>Email</th><th>Source</th><th>Type</th></tr></thead>
+                      <tbody>
+                        {previewDataByFile[previewTab].previewLeads.map((l, i) => (
+                          <tr key={i}><td>{i + 1}</td><td>{l.first_name} {l.last_name}</td><td>{l.phone}</td><td>{l.email || '\u2014'}</td><td>{l.lead_source || '\u2014'}</td><td>{l.lead_type || '\u2014'}</td></tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <p className="form-hint">Showing first {previewDataByFile[previewTab].previewLeads.length} of {previewDataByFile[previewTab].totalLeads} leads.</p>
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem', gap: '0.5rem' }}>
               <button className="btn btn-primary" onClick={doImport}>
-                {dryRun ? `Dry Run ${fullBuildData.leads.length} Leads` : `Import ${fullBuildData.leads.length} Leads`}
+                {dryRun ? 'Dry Run' : 'Import'} {totalLeadsAcrossFiles} Leads
               </button>
             </div>
           </div>
         )}
 
-        {/* IMPORTING */}
         {step === 'importing' && (
           <div style={{ textAlign: 'center', padding: '3rem 0' }}>
-            <p style={{ fontFamily: 'var(--font-display)', fontSize: '0.9rem', fontWeight: 600, color: 'var(--text)', marginBottom: '1rem' }}>
+            <p style={{ fontFamily: 'var(--font-display)', fontSize: '0.9rem', fontWeight: 600, color: 'var(--text)', marginBottom: '0.5rem' }}>
               {dryRun ? 'Validating leads...' : 'Importing leads...'}
+            </p>
+            <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+              File {progress.fileIndex + 1}/{fileQueue.length}: {progress.fileName}
             </p>
             <div className="progress-bar-container" style={{ marginBottom: '0.5rem' }}>
               <div className="progress-bar" style={{ width: (progress.total > 0 ? (progress.current / progress.total * 100) : 0) + '%' }} />
             </div>
-            <p className="progress-label">{progress.current} / {progress.total}</p>
+            <p className="progress-label">{progress.current} / {progress.total} leads</p>
+            {fileQueue.filter(f => f.status === 'done').length > 0 && (
+              <div style={{ marginTop: '1rem', textAlign: 'left' }}>
+                {fileQueue.map((fq, i) => fq.status === 'done' && fq.result ? (
+                  <div key={i} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--text-muted)', padding: '0.25rem 0' }}>
+                    {'\u2713'} {fq.name}: {fq.result.created} created{fq.result.failed > 0 ? ', ' + fq.result.failed + ' failed' : ''}
+                  </div>
+                ) : null)}
+              </div>
+            )}
           </div>
         )}
 
-        {/* RESULTS — Enhanced completion screen */}
-        {step === 'results' && result && (
+        {step === 'results' && grandResult && (
           <div>
             <div style={{ textAlign: 'center', padding: '1.5rem 0' }}>
-              <div style={{ width: 48, height: 48, borderRadius: '50%', background: result.failed === 0 ? 'oklch(18% 0.04 145)' : 'oklch(18% 0.04 75)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 0.75rem', color: result.failed === 0 ? 'var(--green)' : 'var(--amber)', fontSize: '1.5rem' }}>{result.failed === 0 ? '✓' : '!'}</div>
+              <div style={{ width: 48, height: 48, borderRadius: '50%', background: grandResult.failed === 0 ? 'oklch(18% 0.04 145)' : 'oklch(18% 0.04 75)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 0.75rem', color: grandResult.failed === 0 ? 'var(--green)' : 'var(--amber)', fontSize: '1.5rem' }}>{grandResult.failed === 0 ? '\u2713' : '!'}</div>
               <h3 className="section-title" style={{ borderBottom: 'none', marginBottom: '0.25rem' }}>{dryRun ? 'Dry Run Complete' : 'Import Complete'}</h3>
-              {dryRun && <div style={{ display: 'inline-block', fontFamily: 'var(--font-mono)', fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'oklch(15% 0.01 85)', background: 'var(--accent)', borderRadius: 3, padding: '0.15rem 0.5rem', marginBottom: '0.5rem' }}>DRY RUN — No data was written</div>}
+              {dryRun && <div style={{ display: 'inline-block', fontFamily: 'var(--font-mono)', fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'oklch(15% 0.01 85)', background: 'var(--accent)', borderRadius: 3, padding: '0.15rem 0.5rem', marginBottom: '0.5rem' }}>DRY RUN</div>}
               <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', display: 'flex', justifyContent: 'center', gap: '1.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
-                <span style={{ color: 'var(--green)' }}>{result.created} created</span>
-                {(result.updated || 0) > 0 && <span style={{ color: 'var(--accent)' }}>{result.updated} updated</span>}
-                {result.failed > 0 && <span style={{ color: 'var(--red)' }}>{result.failed} failed</span>}
-                {(result.ghlWarnings?.length || 0) > 0 && <span style={{ color: 'var(--amber)' }}>{result.ghlWarnings.length} GHL warnings</span>}
-                {(result.droppedCount || 0) > 0 && <span style={{ color: 'var(--text-muted)' }}>{result.droppedCount} rows dropped (missing required fields)</span>}
+                <span style={{ color: 'var(--green)' }}>{grandResult.created} created</span>
+                {grandResult.failed > 0 && <span style={{ color: 'var(--red)' }}>{grandResult.failed} failed</span>}
+                {(grandResult.ghlWarnings?.length || 0) > 0 && <span style={{ color: 'var(--amber)' }}>{grandResult.ghlWarnings.length} GHL warnings</span>}
+                {(grandResult.droppedCount || 0) > 0 && <span style={{ color: 'var(--text-muted)' }}>{grandResult.droppedCount} rows dropped</span>}
               </div>
             </div>
 
-            {/* Failed rows */}
-            {result.errors && result.errors.length > 0 && (
+            {fileQueue.length > 1 && (
+              <div style={{ marginBottom: '1rem' }}>
+                <h4 style={{ fontFamily: 'var(--font-display)', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text)', marginBottom: '0.5rem' }}>Per-File Breakdown</h4>
+                <table className="results-table" style={{ fontSize: '0.7rem' }}>
+                  <thead><tr><th>File</th><th>Created</th><th>Failed</th><th>Dropped</th><th>GHL Warnings</th></tr></thead>
+                  <tbody>
+                    {fileQueue.map((fq, i) => fq.result && (
+                      <tr key={i}>
+                        <td style={{ fontFamily: 'var(--font-mono)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fq.name}</td>
+                        <td style={{ color: 'var(--green)' }}>{fq.result.created}</td>
+                        <td style={{ color: fq.result.failed > 0 ? 'var(--red)' : 'var(--text-muted)' }}>{fq.result.failed}</td>
+                        <td style={{ color: fq.result.droppedCount > 0 ? 'var(--amber)' : 'var(--text-muted)' }}>{fq.result.droppedCount || 0}</td>
+                        <td style={{ color: (fq.result.ghlWarnings?.length || 0) > 0 ? 'var(--amber)' : 'var(--text-muted)' }}>{fq.result.ghlWarnings?.length || 0}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {grandResult.errors && grandResult.errors.length > 0 && (
               <div style={{ marginBottom: '1rem' }}>
                 <h4 style={{ fontFamily: 'var(--font-display)', fontSize: '0.75rem', fontWeight: 600, color: 'var(--red)', marginBottom: '0.5rem' }}>Failed Rows</h4>
                 <div style={{ maxHeight: 160, overflow: 'auto' }}>
-                  {result.errors.slice(0, 20).map((e, i) => (
+                  {grandResult.errors.slice(0, 20).map((e, i) => (
                     <div key={i} className="alert alert-error" style={{ marginTop: i > 0 ? '0.375rem' : 0, fontSize: '0.7rem', padding: '0.375rem 0.625rem' }}>
                       Row {e.index + 1}{e.lead_name ? ' (' + e.lead_name + ')' : ''}: {e.error}
                     </div>
                   ))}
-                  {result.errors.length > 20 && <p className="form-hint">...and {result.errors.length - 20} more errors</p>}
+                  {grandResult.errors.length > 20 && <p className="form-hint">...and {grandResult.errors.length - 20} more</p>}
                 </div>
               </div>
             )}
 
-            {/* GHL warnings */}
-            {result.ghlWarnings && result.ghlWarnings.length > 0 && (
+            {grandResult.ghlWarnings && grandResult.ghlWarnings.length > 0 && (
               <div style={{ marginBottom: '1rem' }}>
-                <h4 style={{ fontFamily: 'var(--font-display)', fontSize: '0.75rem', fontWeight: 600, color: 'var(--amber)', marginBottom: '0.5rem' }}>GHL Warnings (leads saved to Notion but not GHL)</h4>
+                <h4 style={{ fontFamily: 'var(--font-display)', fontSize: '0.75rem', fontWeight: 600, color: 'var(--amber)', marginBottom: '0.5rem' }}>GHL Warnings</h4>
                 <div style={{ maxHeight: 120, overflow: 'auto' }}>
-                  {result.ghlWarnings.slice(0, 10).map((w, i) => (
+                  {grandResult.ghlWarnings.slice(0, 10).map((w, i) => (
                     <div key={i} style={{ background: 'oklch(18% 0.04 75)', border: '1px solid oklch(25% 0.05 75)', color: 'var(--amber)', padding: '0.375rem 0.625rem', fontFamily: 'var(--font-mono)', fontSize: '0.7rem', borderRadius: 2, marginTop: i > 0 ? '0.375rem' : 0 }}>
                       {w.lead_name}: {w.error}
                     </div>
                   ))}
-                  {result.ghlWarnings.length > 10 && <p className="form-hint">...and {result.ghlWarnings.length - 10} more warnings</p>}
+                  {grandResult.ghlWarnings.length > 10 && <p className="form-hint">...and {grandResult.ghlWarnings.length - 10} more</p>}
                 </div>
               </div>
             )}
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
-              {result.failed > 0 && result.errors?.length > 0 && (
-                <button className="btn" onClick={retryFailed}>Retry {result.failed} Failed</button>
-              )}
               <button className="btn btn-primary" onClick={resetWizard}>Import More</button>
             </div>
           </div>
