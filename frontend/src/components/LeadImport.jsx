@@ -70,7 +70,7 @@ function LeadImport() {
       for (const file of fileList) {
         const { headers: hdrs, parsedRows: rows, sampleRow: sample } = await parseOneFile(file)
         const det = autoDetectVendor(file.name)
-        newQueue.push({ file, name: file.name, vendor: det.vendor, tier: det.tier, leadType: det.leadType, leadAge: '', purchaseDate: '', status: 'pending', result: null, headers: hdrs, parsedRows: rows, sampleRow: sample })
+        newQueue.push({ file, name: file.name, vendor: det.vendor, tier: det.tier, leadType: det.leadType, leadAge: det.leadAge || '', purchaseDate: '', status: 'pending', result: null, headers: hdrs, parsedRows: rows, sampleRow: sample })
       }
       setFileQueue(newQueue)
       if (newQueue.length > 0) {
@@ -270,7 +270,7 @@ function LeadImport() {
                 <thead><tr><th>File</th><th>Rows</th><th>Vendor</th><th>Tier</th><th>Lead Type</th>{fileQueue.some(fq => NEEDS_LEAD_AGE[fq.vendor]) && <th>Age</th>}<th>Purchase Date</th>{fileQueue.length > 1 && <th></th>}</tr></thead>
                 <tbody>{fileQueue.map((fq, idx) => (
                   <tr key={idx}>
-                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={fq.name}>{fq.name}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={fq.name}>{fq.name.replace(/\.[^.]+$/, '')}</td>
                     <td>{fq.parsedRows.length}</td>
                     <td><select className="form-input" style={{ fontSize: '0.7rem', padding: '0.2rem 0.4rem' }} value={fq.vendor} onChange={e => { const v = e.target.value; updateFileQueueItem(idx, { vendor: v, tier: (VENDOR_TIERS[v] || [])[0] || 'N/A' }) }}>{LEAD_VENDORS.map(v => <option key={v} value={v}>{v}</option>)}</select></td>
                     <td><select className="form-input" style={{ fontSize: '0.7rem', padding: '0.2rem 0.4rem' }} value={fq.tier} onChange={e => updateFileQueueItem(idx, { tier: e.target.value })} disabled={fq.vendor === 'Proven Leads'}>{(VENDOR_TIERS[fq.vendor] || []).map(t => <option key={t} value={t}>{t}</option>)}</select></td>

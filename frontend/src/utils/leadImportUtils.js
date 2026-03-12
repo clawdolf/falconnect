@@ -253,7 +253,7 @@ export function autoMapHeaders(hdrs) {
  */
 export function autoDetectVendor(filename) {
   const fn = filename.toLowerCase()
-  const out = { vendor: 'HOFLeads', tier: 'Diamond', leadType: 'Mortgage Protection' }
+  const out = { vendor: 'HOFLeads', tier: 'Diamond', leadType: 'Mortgage Protection', leadAge: '' }
   if (fn.includes('hof')) {
     out.vendor = 'HOFLeads'
     if (fn.includes('gold') || fn.includes('t2')) out.tier = 'Gold'
@@ -265,6 +265,23 @@ export function autoDetectVendor(filename) {
   if (fn.includes('final expense') || fn.includes('_fe_')) out.leadType = 'Final Expense'
   else if (fn.includes('annuity')) out.leadType = 'Annuity'
   else if (fn.includes('iul')) out.leadType = 'IUL'
+
+  // Auto-detect lead age from filename (e.g. "proven_3m_batch.csv", "leads-6m.csv", "24-36m_list.xlsx")
+  // Order matters: check range patterns before single values
+  const ageMap = [
+    { pattern: /\b(49[-–_]?60\s*m)\b/,  value: '49–60M' },
+    { pattern: /\b(37[-–_]?48\s*m)\b/,  value: '37–48M' },
+    { pattern: /\b(25[-–_]?36\s*m)\b/,  value: '25–36M' },
+    { pattern: /\b(13[-–_]?24\s*m)\b/,  value: '13–24M' },
+    { pattern: /\b(7[-–_]?12\s*m)\b/,   value: '7–12M'  },
+    { pattern: /\b60\+?\s*m\b/,          value: '60+M'   },
+    { pattern: /\b3\s*m\b/,              value: '3M'     },
+    { pattern: /\b6\s*m\b/,              value: '6M'     },
+  ]
+  for (const { pattern, value } of ageMap) {
+    if (pattern.test(fn)) { out.leadAge = value; break }
+  }
+
   return out
 }
 
