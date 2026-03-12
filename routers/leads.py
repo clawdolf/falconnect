@@ -202,23 +202,22 @@ async def bulk_import_leads(
                         lead_name, opp_exc,
                     )
 
-                # Update Notion with GHL contact ID (cross-reference)
-                # Bug 7 fix: Read existing comments first, then merge
+                # Update Notion with GHL contact ID → write to "GHL ID" field (bare ID, no prefix)
                 if ghl_contact_id:
                     try:
-                        existing_comments = await notion._read_aggregate_comments(notion_page_id)
-                        new_comments = _build_aggregate_comments(
-                            ghl_contact_id, item.notes, existing_comments
-                        )
-                        await notion.update_page(notion_page_id, {
-                            "Aggregate Comments": {
-                                "rich_text": [{
-                                    "text": {
-                                        "content": new_comments
-                                    }
-                                }]
+                        props: dict = {
+                            "GHL ID": {
+                                "rich_text": [{"text": {"content": ghl_contact_id}}]
                             }
-                        })
+                        }
+                        # Write notes to Aggregate Comments separately if present
+                        if item.notes:
+                            existing_comments = await notion._read_aggregate_comments(notion_page_id)
+                            merged = item.notes if not existing_comments else f"{existing_comments} | {item.notes}"
+                            props["Aggregate Comments"] = {
+                                "rich_text": [{"text": {"content": merged}}]
+                            }
+                        await notion.update_page(notion_page_id, props)
                     except Exception:
                         pass  # Non-fatal
 
@@ -383,21 +382,22 @@ async def capture_lead(
         except Exception as exc:
             logger.warning("GHL create_opportunity failed (non-fatal): %s", exc)
 
-        # Update Notion with GHL ID (Bug 7: read-then-merge)
+        # Update Notion with GHL ID → write to "GHL ID" field (bare ID, no prefix)
         if ghl_contact_id:
             try:
                 notes = lead_dict.get("notes", "")
-                existing_comments = await notion._read_aggregate_comments(notion_page_id)
-                new_comments = _build_aggregate_comments(ghl_contact_id, notes, existing_comments)
-                await notion.update_page(notion_page_id, {
-                    "Aggregate Comments": {
-                        "rich_text": [{
-                            "text": {
-                                "content": new_comments
-                            }
-                        }]
+                props: dict = {
+                    "GHL ID": {
+                        "rich_text": [{"text": {"content": ghl_contact_id}}]
                     }
-                })
+                }
+                if notes:
+                    existing_comments = await notion._read_aggregate_comments(notion_page_id)
+                    merged = notes if not existing_comments else f"{existing_comments} | {notes}"
+                    props["Aggregate Comments"] = {
+                        "rich_text": [{"text": {"content": merged}}]
+                    }
+                await notion.update_page(notion_page_id, props)
             except Exception:
                 pass
 
