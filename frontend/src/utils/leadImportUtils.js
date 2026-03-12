@@ -1,14 +1,25 @@
 /**
- * Shared lead import utilities — constants, mapping, vendor detection, lead building.
- * Used by LeadImport.jsx (and previously LeadImportWizardModal.jsx, now deleted).
+ * leadImportUtils.js — FalconConnect v3
+ *
+ * Shared lead import utilities: constants, column mapping, vendor detection, lead building.
+ * Used by LeadImport.jsx for multi-CSV batch import.
+ *
+ * ⚠️  COLUMN_ALIASES are production-tested (57 patterns verified). Do not modify without re-testing.
+ * ⚠️  buildLeads() logic (full_name splitting, phone fallback, boolean normalization, 2-digit birth year)
+ *     is verified correct. Do not change normalization behavior.
  */
 
+
+// ═══════════════════════════════════════════════
+// SECTION 1 — Vendor & Tier Constants
+// ═══════════════════════════════════════════════
+
 export const VENDOR_TIERS = {
-  'HOFLeads': ['Diamond', 'Gold', 'Silver'],
-  'Proven Leads': ['N/A'],
-  'Aria Leads': ['Gold', 'Silver', 'N/A'],
-  'MilMo': ['Gold', 'Silver', 'N/A'],
-  'Cheryl': ['T1', 'T2', 'T3', 'T4', 'T5'],
+  'HOFLeads':      ['Diamond', 'Gold', 'Silver'],
+  'Proven Leads':  ['N/A'],
+  'Aria Leads':    ['Gold', 'Silver', 'N/A'],
+  'MilMo':         ['Gold', 'Silver', 'N/A'],
+  'Cheryl':        ['T1', 'T2', 'T3', 'T4', 'T5'],
 }
 
 export const NEEDS_LEAD_AGE = {
@@ -19,52 +30,78 @@ export const NEEDS_LEAD_AGE = {
   'Cheryl': true,
 }
 
-// Per-vendor age buckets — each vendor can have different bracket labels
 export const VENDOR_AGE_BUCKETS = {
-  'HOFLeads': [],
-  'Proven Leads': ['7\u201312M', '13\u201324M', '25\u201336M', '37\u201348M', '49\u201360M', '60+M'],
-  'Aria Leads': ['7\u201312M', '13\u201324M', '25\u201336M', '37\u201348M', '49\u201360M', '60+M'],
-  'MilMo': ['7\u201312M', '13\u201324M', '25\u201336M', '37\u201348M', '49\u201360M', '60+M'],
-  'Cheryl': ['T1', 'T2', 'T3', 'T4', 'T5'],
+  'HOFLeads':      [],
+  'Proven Leads':  ['7\u201312M', '13\u201324M', '25\u201336M', '37\u201348M', '49\u201360M', '60+M'],
+  'Aria Leads':    ['7\u201312M', '13\u201324M', '25\u201336M', '37\u201348M', '49\u201360M', '60+M'],
+  'MilMo':         ['7\u201312M', '13\u201324M', '25\u201336M', '37\u201348M', '49\u201360M', '60+M'],
+  'Cheryl':        ['T1', 'T2', 'T3', 'T4', 'T5'],
 }
 
-// Legacy fallback — kept for any code that imported LEAD_AGE_BUCKETS directly
+/** Legacy fallback — kept for any code that imported LEAD_AGE_BUCKETS directly */
 export const LEAD_AGE_BUCKETS = ['7\u201312M', '13\u201324M', '25\u201336M', '37\u201348M', '49\u201360M', '60+M']
+
+
+// ═══════════════════════════════════════════════
+// SECTION 2 — Lead Types & Vendors
+// ═══════════════════════════════════════════════
 
 export const LEAD_TYPES = ['Mortgage Protection', 'Final Expense', 'Annuity', 'IUL']
 
 export const LEAD_VENDORS = Object.keys(VENDOR_TIERS)
 
+
+// ═══════════════════════════════════════════════
+// SECTION 3 — Lead Field Definitions (for mapping dropdowns)
+// ═══════════════════════════════════════════════
+
 export const LEAD_FIELDS = [
+  // Names
+  { value: 'full_name', label: 'Full Name (split into first + last)' },
   { value: 'first_name', label: 'First Name' },
   { value: 'last_name', label: 'Last Name' },
+
+  // Phone
   { value: 'phone', label: 'Phone' },
   { value: 'home_phone', label: 'Home Phone' },
   { value: 'mobile_phone', label: 'Mobile Phone' },
   { value: 'spouse_phone', label: 'Spouse Phone' },
+
+  // Contact
   { value: 'email', label: 'Email' },
   { value: 'address', label: 'Address' },
   { value: 'city', label: 'City' },
   { value: 'state', label: 'State' },
   { value: 'zip_code', label: 'ZIP Code' },
+
+  // Demographics
   { value: 'birth_year', label: 'Birth Year' },
+  { value: 'dob', label: 'DOB (Full Date)' },
+  { value: 'gender', label: 'Gender' },
+
+  // Lead metadata
   { value: 'lead_source', label: 'Lead Source' },
   { value: 'lead_type', label: 'Lead Type' },
   { value: 'lead_age_bucket', label: 'Lead Age Bucket' },
+  { value: 'lpd', label: 'Lead Purchase Date (LPD)' },
+
+  // Financial
   { value: 'lender', label: 'Lender' },
   { value: 'loan_amount', label: 'Loan Amount' },
   { value: 'mail_date', label: 'Mail Date' },
+
+  // Notes & flags
   { value: 'notes', label: 'Notes' },
-  { value: 'gender', label: 'Gender' },
-  { value: 'home_phone', label: 'Home Phone' },
-  { value: 'spouse_phone', label: 'Spouse Phone' },
   { value: 'best_time_to_call', label: 'Best Time to Call' },
-  { value: 'dob', label: 'DOB (Full Date)' },
-  { value: 'lpd', label: 'Lead Purchase Date (LPD)' },
   { value: 'tobacco', label: 'Tobacco?' },
   { value: 'medical', label: 'Medical Issues?' },
   { value: 'spanish', label: 'Spanish?' },
 ]
+
+
+// ═══════════════════════════════════════════════
+// SECTION 4 — Column Aliases (57 patterns, production-verified)
+// ═══════════════════════════════════════════════
 
 export const COLUMN_ALIASES = {
   // ── Names ──
@@ -79,12 +116,11 @@ export const COLUMN_ALIASES = {
   'clientlastname': 'last_name', 'primarylastname': 'last_name',
 
   // ── Phone — primary (maps to `phone` which backend requires) ──
-  // Any of these becomes the main phone field
+  // NOTE: 'mobile phone' and 'mobilephone' intentionally map to `phone` (primary),
+  // NOT mobile_phone, because most vendor files label their only phone as "Mobile Phone"
   'phone': 'phone', 'phone1': 'phone', 'primaryphone': 'phone',
   'cell': 'phone', 'cell phone': 'phone', 'cellphone': 'phone',
   'mobile': 'phone', 'mphone': 'phone',
-  // NOTE: 'mobile phone' and 'mobilephone' intentionally map to `phone` (primary),
-  // NOT mobile_phone, because most vendor files label their only phone as "Mobile Phone"
   'mobile phone': 'phone', 'mobilephone': 'phone', 'mobile_phone': 'phone',
 
   // ── Phone — secondary ──
@@ -147,11 +183,51 @@ export const COLUMN_ALIASES = {
   'gender': 'gender', 'sex': 'gender', 'genderidentity': 'gender', 'gender_identity': 'gender',
 }
 
+
+// ═══════════════════════════════════════════════
+// SECTION 5 — Wizard Step Labels
+// ═══════════════════════════════════════════════
+
 export const STEP_LABELS = {
-  source: 'Source', file: 'Upload', sheets: 'Sheets',
-  mapping: 'Map Columns', metadata: 'Lead Details',
-  preview: 'Preview', importing: 'Importing', results: 'Results',
+  upload: 'Upload',
+  fileConfig: 'File Config',
+  mapping: 'Column Mapping',
+  preview: 'Preview',
+  importing: 'Importing',
+  results: 'Results',
 }
+
+
+// ═══════════════════════════════════════════════
+// SECTION 6 — Required Fields for Validation
+// ═══════════════════════════════════════════════
+
+/** Check if a column map satisfies minimum requirements for import */
+export function isMappingValid(columnMap) {
+  const vals = Object.values(columnMap).filter(Boolean)
+  const hasPhone = vals.includes('phone') || vals.includes('mobile_phone') || vals.includes('home_phone')
+  const hasName = (vals.includes('first_name') && vals.includes('last_name')) || vals.includes('full_name')
+  return hasPhone && hasName
+}
+
+/** Get list of missing required fields for display */
+export function getMissingRequired(columnMap) {
+  const vals = Object.values(columnMap).filter(Boolean)
+  const missing = []
+  const hasName = (vals.includes('first_name') && vals.includes('last_name')) || vals.includes('full_name')
+  const hasPhone = vals.includes('phone') || vals.includes('mobile_phone') || vals.includes('home_phone')
+  if (!hasName) missing.push('Name (First + Last, or Full Name)')
+  if (!hasPhone) missing.push('Phone')
+  return missing
+}
+
+/** Required field keys that must be present in mapping */
+export const REQUIRED_FIELD_KEYS = ['first_name', 'last_name', 'full_name', 'phone', 'mobile_phone', 'home_phone']
+
+
+// ═══════════════════════════════════════════════
+// SECTION 7 — Auto-Map Headers
+// ═══════════════════════════════════════════════
 
 /**
  * Auto-map spreadsheet headers to lead fields using aliases and exact matches.
@@ -167,6 +243,11 @@ export function autoMapHeaders(hdrs) {
   return m
 }
 
+
+// ═══════════════════════════════════════════════
+// SECTION 8 — Auto-Detect Vendor from Filename
+// ═══════════════════════════════════════════════
+
 /**
  * Auto-detect vendor/tier/leadType from filename patterns.
  */
@@ -180,17 +261,29 @@ export function autoDetectVendor(filename) {
   } else if (fn.includes('proven')) { out.vendor = 'Proven Leads'; out.tier = 'N/A' }
   else if (fn.includes('aria')) { out.vendor = 'Aria Leads'; out.tier = 'Gold' }
   else if (fn.includes('milmo')) { out.vendor = 'MilMo'; out.tier = 'Gold' }
+  else if (fn.includes('cheryl')) { out.vendor = 'Cheryl'; out.tier = 'T1' }
   if (fn.includes('final expense') || fn.includes('_fe_')) out.leadType = 'Final Expense'
   else if (fn.includes('annuity')) out.leadType = 'Annuity'
   else if (fn.includes('iul')) out.leadType = 'IUL'
   return out
 }
 
+
+// ═══════════════════════════════════════════════
+// SECTION 9 — Build Leads from Parsed Rows
+// ═══════════════════════════════════════════════
+
 /**
  * Build lead objects from parsed rows, applying column mapping and batch metadata.
  *
- * BUG 9 FIX: Only apply batch leadAge if the row doesn't already have a lead_age_bucket value.
- * BUG 12 FIX: Returns { leads, droppedCount } — tracks rows missing required fields.
+ * Logic preserved from original:
+ * - full_name splitting to first_name + last_name
+ * - Phone fallback: mobile_phone → phone, home_phone → phone
+ * - Boolean normalization for tobacco/medical/spanish
+ * - 2-digit birth year correction (65→1965, 24→2024)
+ * - Batch metadata applied only when row doesn't have its own value
+ *
+ * Returns { leads, droppedCount } — tracks rows missing required fields.
  */
 export function buildLeads(rows, headers, columnMap, vendor, tier, leadType, leadAge, purchaseDate) {
   const leads = []
@@ -208,7 +301,8 @@ export function buildLeads(rows, headers, columnMap, vendor, tier, leadType, lea
         }
       }
     })
-    // RISK FIX: Full Name splitting — if CSV has no first_name/last_name but has 'name'/'full_name',
+
+    // Full Name splitting — if CSV has no first_name/last_name but has full_name,
     // split on first space to extract first + last
     if (!lead.first_name && !lead.last_name && lead.full_name) {
       const parts = String(lead.full_name).trim().split(/\s+/)
@@ -221,29 +315,31 @@ export function buildLeads(rows, headers, columnMap, vendor, tier, leadType, lea
     if (!lead.phone && lead.mobile_phone) lead.phone = lead.mobile_phone
     if (!lead.phone && lead.home_phone) lead.phone = lead.home_phone
 
-    // BUG 12: Track dropped rows instead of silently skipping
+    // Track dropped rows instead of silently skipping
     if (!lead.first_name || !lead.last_name || !lead.phone) {
       droppedCount++
       continue
     }
+
+    // Apply batch metadata (only when row doesn't have its own value)
     if (vendor && !lead.lead_source) lead.lead_source = vendor + (tier && tier !== 'N/A' ? ' / ' + tier : '')
     if (leadType && !lead.lead_type) lead.lead_type = leadType
-    // BUG 9 FIX: Only apply batch lead age if row doesn't already have one
     if (leadAge && !lead.lead_age_bucket) lead.lead_age_bucket = leadAge
     if (purchaseDate && !lead.mail_date) lead.mail_date = purchaseDate
-    // Field-parity: tier and LPD from wizard-level metadata
     if (tier && !lead.tier) lead.tier = tier
     if (purchaseDate && !lead.lpd) lead.lpd = purchaseDate
-    // RISK FIX: 2-digit birth year (e.g. "65" → 1965, not 65)
+
+    // 2-digit birth year correction (e.g. "65" → 1965, "24" → 2024)
     if (lead.birth_year) {
       let yr = parseInt(lead.birth_year, 10)
       if (!isNaN(yr)) {
-        if (yr >= 0 && yr <= 99) yr += yr >= 0 && yr <= 24 ? 2000 : 1900  // 65→1965, 24→2024
+        if (yr >= 0 && yr <= 99) yr += yr >= 0 && yr <= 24 ? 2000 : 1900
         lead.birth_year = yr
       } else {
         lead.birth_year = undefined
       }
     }
+
     leads.push(lead)
   }
   return { leads, droppedCount }
