@@ -164,7 +164,8 @@ async def get_my_licenses(
     ]
 
 
-@router.post("/", response_model=License, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=License, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=License, status_code=status.HTTP_201_CREATED, include_in_schema=False)
 async def create_license(
     license_data: LicenseCreate,
     user=Depends(require_auth),
