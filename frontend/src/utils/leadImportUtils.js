@@ -80,6 +80,10 @@ export const LEAD_FIELDS = [
   { value: 'dob', label: 'DOB (Full Date)' },
   { value: 'gender', label: 'Gender' },
 
+  // Spouse
+  { value: 'spouse_dob', label: 'Spouse DOB' },
+  { value: 'spouse_age', label: 'Spouse Age' },
+
   // Lead metadata
   { value: 'lead_source', label: 'Lead Source' },
   { value: 'lead_type', label: 'Lead Type' },
@@ -153,6 +157,15 @@ export const COLUMN_ALIASES = {
   'birth year': 'birth_year', 'birth_year': 'birth_year', 'birthyear': 'birth_year',
   'age': 'birth_year', 'borrowerage': 'birth_year',
   'age1': 'birth_year',  // Cheryl vendor format (redundant if BIRTHDATE 1 mapped, but safe)
+
+  // ── Spouse DOB / Age ──
+  'birthdate 2': 'spouse_dob', 'birthdate2': 'spouse_dob',  // Cheryl vendor format
+  'spouse dob': 'spouse_dob', 'spouse_dob': 'spouse_dob',
+  'spouse birthdate': 'spouse_dob',
+  'coborrower dob': 'spouse_dob', 'co-borrower dob': 'spouse_dob',
+  'age2': 'spouse_age',  // Cheryl vendor format
+  'spouse age': 'spouse_age', 'spouse_age': 'spouse_age',
+  'coborrower age': 'spouse_age',
 
   // ── Lead metadata ──
   'source': 'lead_source', 'lead source': 'lead_source', 'lead_source': 'lead_source',
@@ -341,7 +354,7 @@ function normalizeDateValue(val) {
 }
 
 /** Fields that contain date values and should be normalized */
-const DATE_FIELDS = ['dob', 'mail_date', 'lpd', 'lead_received']
+const DATE_FIELDS = ['dob', 'mail_date', 'lpd', 'lead_received', 'spouse_dob']
 
 
 // ═══════════════════════════════════════════════
@@ -415,6 +428,12 @@ export function buildLeads(rows, headers, columnMap, vendor, tier, leadType, lea
 
     // Vendor Lead ID: force to string (may come as large integer from CSV)
     if (lead.vendor_lead_id) lead.vendor_lead_id = String(lead.vendor_lead_id)
+
+    // Spouse Age: cast to int, drop if invalid/zero
+    if (lead.spouse_age) {
+      const sa = parseInt(lead.spouse_age, 10)
+      if (isNaN(sa) || sa === 0) { delete lead.spouse_age } else { lead.spouse_age = sa }
+    }
 
     // Apply batch metadata (only when row doesn't have its own value)
     if (vendor && !lead.lead_source) lead.lead_source = vendor + (tier && tier !== 'N/A' ? ' / ' + tier : '')

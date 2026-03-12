@@ -51,6 +51,8 @@ class BulkLeadItem(BaseModel):
     home_phone: Optional[str] = Field(None, max_length=40)
     mobile_phone: Optional[str] = Field(None, max_length=40)
     spouse_phone: Optional[str] = Field(None, max_length=40)
+    spouse_dob: Optional[str] = None           # Spouse date of birth (ISO string)
+    spouse_age: Optional[int] = Field(None, ge=0, le=120)  # Spouse age
     notes: Optional[str] = Field(None, max_length=2000)
     # Field-parity additions (match old Notion import script)
     tier: Optional[str] = Field(None, max_length=32)

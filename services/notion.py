@@ -377,6 +377,17 @@ def _build_properties(
     if lead.get("spouse_phone"):
         props["Spouse Cell"] = {"phone_number": str(lead["spouse_phone"])}
 
+    # Spouse DOB (date) + auto-check Spouse checkbox
+    if lead.get("spouse_dob"):
+        spouse_dob_parsed = _parse_date_flexible(lead["spouse_dob"])
+        if spouse_dob_parsed:
+            props["Spouse DOB"] = {"date": {"start": spouse_dob_parsed}}
+            props["Spouse"] = {"checkbox": True}
+
+    # Spouse Age (number)
+    if lead.get("spouse_age") is not None:
+        props["Spouse Age"] = {"number": int(lead["spouse_age"])}
+
     # Lender (rich_text)
     if lead.get("lender"):
         props["Lender"] = {
