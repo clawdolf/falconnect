@@ -99,7 +99,7 @@ async def upsert_lead(
         props = _build_properties(
             lead, ghl_contact_id, age, lage_months,
             existing_comments=existing_comments,
-            is_create=False,  # Don't overwrite Call In Date on update
+            is_create=False,  # Don't overwrite Lead Received on update
         )
         await update_page(page_id, props)
         logger.info("Notion updated existing page %s (dupe: %s)", page_id, lead.get("phone", ""))
@@ -337,9 +337,17 @@ def _build_properties(
         if lpd_parsed:
             props["LPD"] = {"date": {"start": lpd_parsed}}
 
-    # Call In Date — set to today, but only on CREATE (not update)
-    if is_create:
-        props["Call In Date"] = {"date": {"start": datetime.now().strftime("%Y-%m-%d")}}
+    # Lead Received Date (was "Call In Date") — use actual lead_received if available, else today on CREATE
+    if lead.get("lead_received"):
+        lead_received_parsed = _parse_date_flexible(lead["lead_received"])
+        if lead_received_parsed:
+            props["Lead Received"] = {"date": {"start": lead_received_parsed}}
+    elif is_create:
+        props["Lead Received"] = {"date": {"start": datetime.now().strftime("%Y-%m-%d")}}
+
+    # Vendor Lead ID (rich_text)
+    if lead.get("vendor_lead_id"):
+        props["Vendor Lead ID"] = {"rich_text": [{"text": {"content": str(lead["vendor_lead_id"])[:64]}}]}
 
     # Best Time to Call (rich_text)
     if lead.get("best_time_to_call"):

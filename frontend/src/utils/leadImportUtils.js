@@ -85,6 +85,8 @@ export const LEAD_FIELDS = [
   { value: 'lead_type', label: 'Lead Type' },
   { value: 'lead_age_bucket', label: 'Lead Age Bucket' },
   { value: 'lpd', label: 'Lead Purchase Date (LPD)' },
+  { value: 'lead_received', label: 'Lead Received Date' },
+  { value: 'vendor_lead_id', label: 'Vendor Lead ID' },
 
   // Financial
   { value: 'lender', label: 'Lender' },
@@ -177,7 +179,17 @@ export const COLUMN_ALIASES = {
   // ── LPD ──
   'lpd': 'lpd', 'lead purchase date': 'lpd', 'purchasedate': 'lpd',
   'delivery date': 'lpd', 'deliverydate': 'lpd',  // Cheryl vendor format
-  'date lead rcvd': 'lpd',  // Cheryl vendor format
+
+  // ── Lead Received Date ──
+  'call in date': 'lead_received', 'call_in_date': 'lead_received', 'callindate': 'lead_received',  // Aria vendor
+  'lead received': 'lead_received', 'lead_received': 'lead_received',
+  'date lead rcvd': 'lead_received', 'date lead received': 'lead_received',  // Cheryl vendor (received date, not purchase date)
+
+  // ── Vendor Lead ID ──
+  'lead_id': 'vendor_lead_id', 'lead id': 'vendor_lead_id', 'leadid': 'vendor_lead_id',
+  'vendor lead id': 'vendor_lead_id', 'vendor_lead_id': 'vendor_lead_id',
+  'external id': 'vendor_lead_id', 'external_id': 'vendor_lead_id',
+  'orderid': 'vendor_lead_id',
 
   // ── Flags ──
   'tobacco': 'tobacco', 'tobacco?': 'tobacco', 'tobaccouse': 'tobacco',
@@ -329,7 +341,7 @@ function normalizeDateValue(val) {
 }
 
 /** Fields that contain date values and should be normalized */
-const DATE_FIELDS = ['dob', 'mail_date', 'lpd']
+const DATE_FIELDS = ['dob', 'mail_date', 'lpd', 'lead_received']
 
 
 // ═══════════════════════════════════════════════
@@ -400,6 +412,9 @@ export function buildLeads(rows, headers, columnMap, vendor, tier, leadType, lea
       droppedCount++
       continue
     }
+
+    // Vendor Lead ID: force to string (may come as large integer from CSV)
+    if (lead.vendor_lead_id) lead.vendor_lead_id = String(lead.vendor_lead_id)
 
     // Apply batch metadata (only when row doesn't have its own value)
     if (vendor && !lead.lead_source) lead.lead_source = vendor + (tier && tier !== 'N/A' ? ' / ' + tier : '')
