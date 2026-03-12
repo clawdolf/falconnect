@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
 from middleware.auth import require_auth
-from services import ghl, notion
+from services import ghl, notion, quo
 from services.ghl import normalize_phone, split_phone_field
 from utils.age import calculate_age, calculate_lage
 
@@ -74,6 +74,7 @@ class BulkImportRequest(BaseModel):
 
     leads: List[BulkLeadItem]
     dry_run: bool = False
+    test_mode: bool = False  # If True: forces tier='TEST', adds 'test-import' tag in GHL, writes normally so you can diagnose + delete
 
 
 class BulkImportError(BaseModel):
@@ -98,6 +99,7 @@ class BulkImportResponse(BaseModel):
     created: int
     updated: int = 0
     failed: int
+    quo_synced: int = 0
     errors: List[BulkImportError]
     ghl_warnings: List[GHLWarning] = []
 
@@ -125,6 +127,7 @@ async def bulk_import_leads(
     created = 0
     updated = 0
     failed = 0
+    quo_synced = 0
     errors: List[BulkImportError] = []
     ghl_warnings: List[GHLWarning] = []
 
@@ -132,6 +135,11 @@ async def bulk_import_leads(
         lead_name = f"{item.first_name} {item.last_name}"
         try:
             lead_dict = item.model_dump()
+
+            # Test mode: override tier to TEST so records are easy to find + delete
+            if req.test_mode:
+                lead_dict["tier"] = "TEST"
+                lead_dict["lead_source"] = f"[TEST] {lead_dict.get('lead_source') or 'FC v3'}"
 
             # Calculate derived fields
             age = calculate_age(item.birth_year) if item.birth_year else None
@@ -173,7 +181,7 @@ async def bulk_import_leads(
             # If GHL fails, log warning but count as success (lead is in Notion)
             ghl_contact_id = ""
             try:
-                ghl_contact = await ghl.upsert_contact(lead_dict)
+                ghl_contact = await ghl.upsert_contact(lead_dict, test_mode=req.test_mode)
                 ghl_contact_id = ghl_contact.get("id", "")
 
                 # Create GHL opportunity
@@ -226,8 +234,17 @@ async def bulk_import_leads(
 
             # BUG 7 FIX: No local DB writes (lead_xref/sync_log removed)
 
+            # ── STEP 3: Quo THIRD (dialer sync) ──
+            # Non-fatal — if Quo fails, lead is still in Notion + GHL
+            try:
+                quo_id = await quo.sync_contact(lead_dict, test_mode=req.test_mode)
+                if quo_id:
+                    quo_synced += 1
+            except Exception as quo_exc:
+                logger.warning("Quo sync failed for %s (non-fatal): %s", lead_name, quo_exc)
+
             created += 1
-            logger.info("Bulk import — created: %s (Notion:%s, GHL:%s)", lead_name, notion_page_id, ghl_contact_id or "SKIPPED")
+            logger.info("Bulk import — created: %s (Notion:%s, GHL:%s, Quo:%s)", lead_name, notion_page_id, ghl_contact_id or "SKIPPED", "yes" if quo_synced else "no")
 
             # Rate limiting delay between GHL calls
             if not req.dry_run and idx < len(req.leads) - 1:
@@ -253,6 +270,7 @@ async def bulk_import_leads(
         created=created,
         updated=updated,
         failed=failed,
+        quo_synced=quo_synced,
         errors=errors,
         ghl_warnings=ghl_warnings,
     )

@@ -203,6 +203,7 @@ async def _find_stage(stage_name: str, pipeline_name: Optional[str] = None) -> D
 async def upsert_contact(
     lead: Dict[str, Any],
     location_id: Optional[str] = None,
+    test_mode: bool = False,
 ) -> Dict[str, Any]:
     """Create or update a GHL contact.
 
@@ -315,7 +316,8 @@ async def upsert_contact(
                     if t.lower() not in tags_to_remove
                     and not t.lower().startswith("imported-")
                 ]
-                merged_tags = list(dict.fromkeys(cleaned_tags + [import_tag]))
+                extra_tags = ["test-import"] if test_mode else []
+                merged_tags = list(dict.fromkeys(cleaned_tags + [import_tag] + extra_tags))
 
                 tag_resp = await client.put(
                     f"{GHL_BASE}/contacts/{contact_id}",
