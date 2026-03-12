@@ -176,6 +176,8 @@ export const COLUMN_ALIASES = {
 
   // ── LPD ──
   'lpd': 'lpd', 'lead purchase date': 'lpd', 'purchasedate': 'lpd',
+  'delivery date': 'lpd', 'deliverydate': 'lpd',  // Cheryl vendor format
+  'date lead rcvd': 'lpd',  // Cheryl vendor format
 
   // ── Flags ──
   'tobacco': 'tobacco', 'tobacco?': 'tobacco', 'tobaccouse': 'tobacco',
@@ -294,6 +296,43 @@ export function autoDetectVendor(filename) {
 
 
 // ═══════════════════════════════════════════════
+// SECTION 8b — Date Normalization Helper
+// ═══════════════════════════════════════════════
+
+/**
+ * Normalize a date value to YYYY-MM-DD string.
+ * Handles: JS Date objects (SheetJS cellDates:true), Excel serial numbers
+ * (SheetJS default), ISO strings, M/D/YYYY strings, and YYYY-MM-DD strings.
+ * Returns the original string if format is unrecognized (let backend handle it).
+ */
+function normalizeDateValue(val) {
+  if (!val) return val
+  // JS Date object (from SheetJS with cellDates:true)
+  if (val instanceof Date && !isNaN(val.getTime())) {
+    return val.toISOString().slice(0, 10)
+  }
+  const s = String(val).trim()
+  // Already YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
+  // M/D/YYYY or M/D/YY — pass through, backend handles these
+  if (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(s)) return s
+  // Excel serial date number (integer > 100 and < 200000, no other chars)
+  const n = Number(s)
+  if (Number.isFinite(n) && n > 100 && n < 200000 && /^\d+$/.test(s)) {
+    // Excel epoch: Jan 0 1900 = day 1, with the Lotus 1-2-3 Feb 29 1900 bug
+    const epoch = new Date(Date.UTC(1899, 11, 30))
+    const d = new Date(epoch.getTime() + n * 86400000)
+    if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10)
+  }
+  // Unrecognized — return as-is and let backend try
+  return s
+}
+
+/** Fields that contain date values and should be normalized */
+const DATE_FIELDS = ['dob', 'mail_date', 'lpd']
+
+
+// ═══════════════════════════════════════════════
 // SECTION 9 — Build Leads from Parsed Rows
 // ═══════════════════════════════════════════════
 
@@ -321,6 +360,9 @@ export function buildLeads(rows, headers, columnMap, vendor, tier, leadType, lea
         // Normalize boolean fields from CSV strings
         if (['tobacco', 'medical', 'spanish'].includes(field)) {
           lead[field] = ['true','1','yes','y','x','si','sí'].includes(String(row[i]).trim().toLowerCase())
+        } else if (DATE_FIELDS.includes(field)) {
+          // Date fields: normalize from raw value (handles Date objects, serial numbers, strings)
+          lead[field] = normalizeDateValue(row[i])
         } else {
           lead[field] = String(row[i]).trim()
         }
@@ -339,6 +381,12 @@ export function buildLeads(rows, headers, columnMap, vendor, tier, leadType, lea
     // Phone fallback: if phone not mapped directly, promote mobile_phone or home_phone
     if (!lead.phone && lead.mobile_phone) lead.phone = lead.mobile_phone
     if (!lead.phone && lead.home_phone) lead.phone = lead.home_phone
+
+    // Normalize date fields — SheetJS may return Excel serial numbers or Date objects
+    // instead of strings, which would fail backend parsing. Convert to YYYY-MM-DD.
+    for (const df of DATE_FIELDS) {
+      if (lead[df]) lead[df] = normalizeDateValue(lead[df])
+    }
 
     // Track dropped rows with reason and original raw data
     if (!lead.first_name || !lead.last_name || !lead.phone) {
