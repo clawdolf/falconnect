@@ -61,6 +61,8 @@ class BulkLeadItem(BaseModel):
     tobacco: Optional[bool] = None
     medical: Optional[bool] = None
     spanish: Optional[bool] = None
+    lead_received: Optional[str] = None       # Date lead was received by vendor (ISO string)
+    vendor_lead_id: Optional[str] = Field(None, max_length=64)  # Vendor's own lead ID
 
     @field_validator('birth_year')
     @classmethod
