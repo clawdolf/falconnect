@@ -28,6 +28,7 @@ function LeadImport() {
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [dryRun, setDryRun] = useState(false)
+  const [testMode, setTestMode] = useState(false)
 
   // Auth (Clerk)
   let getToken = null
@@ -153,7 +154,7 @@ function LeadImport() {
         const resp = await fetch('/api/leads/bulk', {
           method: 'POST',
           headers: hdrs,
-          body: JSON.stringify({ leads: batch, dry_run: dryRun })
+          body: JSON.stringify({ leads: batch, dry_run: dryRun, test_mode: testMode })
         })
         if (resp.ok) {
           const d = await resp.json()
@@ -199,7 +200,7 @@ function LeadImport() {
     try {
       const resp = await fetch('/api/leads/bulk', {
         method: 'POST', headers: hdrs,
-        body: JSON.stringify({ leads: failedLeads, dry_run: dryRun })
+        body: JSON.stringify({ leads: failedLeads, dry_run: dryRun, test_mode: testMode })
       })
       if (resp.ok) {
         const d = await resp.json()
@@ -270,6 +271,31 @@ function LeadImport() {
             {dryRun ? 'Wizard and menus work — no data will be sent to GHL or Notion' : 'Live mode — imports will write to GHL and Notion'}
           </span>
         </div>
+
+        {/* Test Mode Toggle */}
+        {!dryRun && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem', padding: '0.625rem 0.875rem', background: testMode ? 'oklch(18% 0.04 200 / 0.6)' : 'var(--surface)', border: '1px solid ' + (testMode ? 'oklch(65% 0.15 200)' : 'var(--border)'), borderRadius: 3 }}>
+            <button
+              onClick={() => setTestMode(t => !t)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '0.5rem',
+                background: testMode ? 'oklch(65% 0.15 200)' : 'var(--bg)',
+                color: testMode ? 'oklch(15% 0.01 200)' : 'var(--text-muted)',
+                border: '1px solid ' + (testMode ? 'oklch(65% 0.15 200)' : 'var(--border)'),
+                borderRadius: 3, padding: '0.3rem 0.75rem',
+                fontFamily: 'var(--font-display)', fontSize: '0.75rem', fontWeight: 700,
+                letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer',
+                transition: 'all 0.15s'
+              }}
+            >
+              <span style={{ width: 10, height: 10, borderRadius: '50%', background: testMode ? 'oklch(15% 0.01 200)' : 'var(--border)', display: 'inline-block', transition: 'all 0.15s' }} />
+              {testMode ? 'TEST MODE ON' : 'TEST MODE OFF'}
+            </button>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: testMode ? 'oklch(65% 0.15 200)' : 'var(--text-muted)' }}>
+              {testMode ? 'Writes to Notion + GHL with Tier=TEST and test-import tag — easy to find and delete' : 'Production — normal import'}
+            </span>
+          </div>
+        )}
 
         {/* Header row */}
         <div className="section-header-row" style={{ marginBottom: '0.25rem' }}>
