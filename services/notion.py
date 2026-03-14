@@ -75,14 +75,14 @@ async def upsert_lead(
     ghl_contact_id: str,
     age: Optional[int] = None,
     lage_months: Optional[int] = None,
-) -> str:
+) -> Dict[str, Any]:
     """Create or update a lead page in the Notion leads database.
 
-    Bug 7 fix: On update, reads existing Aggregate Comments first
+    On update, reads existing Aggregate Comments first
     and merges/preserves them instead of overwriting.
 
     Searches for an existing page by phone; creates if not found.
-    Returns the Notion page ID.
+    Returns dict with 'page_id' and 'is_new' (True for create, False for update).
     """
     settings = get_settings()
     db_id = settings.notion_leads_db_id
@@ -94,7 +94,7 @@ async def upsert_lead(
     if existing:
         page_id = existing
 
-        # Bug 7: Read existing Aggregate Comments before building properties
+        # Read existing Aggregate Comments before building properties
         existing_comments = await _read_aggregate_comments(page_id)
         props = _build_properties(
             lead, ghl_contact_id, age, lage_months,
@@ -103,7 +103,7 @@ async def upsert_lead(
         )
         await update_page(page_id, props)
         logger.info("Notion updated existing page %s (dupe: %s)", page_id, lead.get("phone", ""))
-        return page_id
+        return {"page_id": page_id, "is_new": False}
 
     # Create new page
     properties = _build_properties(lead, ghl_contact_id, age, lage_months)
@@ -122,7 +122,7 @@ async def upsert_lead(
         resp.raise_for_status()
         page_id = resp.json()["id"]
         logger.info("Notion created new page %s", page_id)
-        return page_id
+        return {"page_id": page_id, "is_new": True}
 
 
 async def _read_aggregate_comments(page_id: str) -> str:
@@ -204,7 +204,7 @@ def _build_properties(
     """
     full_name = f"{lead.get('first_name', '')} {lead.get('last_name', '')}".strip()
 
-    # Bug 7: Build Aggregate Comments with merge logic
+    # Build Aggregate Comments with merge logic
     new_ghl_ref = f"GHL:{ghl_contact_id}" if ghl_contact_id else ""
     if existing_comments:
         # Check if GHL ID is already in existing comments
@@ -222,6 +222,11 @@ def _build_properties(
             comment_text = existing_comments
     else:
         comment_text = new_ghl_ref
+
+    # Append notes to comment_text if present and not already included
+    notes = lead.get("notes", "")
+    if notes and notes not in comment_text:
+        comment_text = f"{comment_text} | {notes}" if comment_text else notes
 
     props: Dict[str, Any] = {
         # title
@@ -314,16 +319,6 @@ def _build_properties(
         mail_date_parsed = _parse_date_flexible(mail_date)
         if mail_date_parsed:
             props["Mortgage Sale Date"] = {"date": {"start": mail_date_parsed}}
-
-    # BUG 4 FIX: Always write GHL ID first, append notes after.
-    # Format: "GHL:{id} | {notes}" — never overwrite the GHL ID portion.
-    notes = lead.get("notes", "")
-    if notes:
-        comment_text = f"GHL:{ghl_contact_id} | {notes}" if ghl_contact_id else notes
-        props["Aggregate Comments"] = {
-            "rich_text": [{"text": {"content": comment_text[:2000]}}]
-        }
-    # If no notes, the default "GHL:{id}" set above is preserved
 
     # ── Field-parity additions (match old Notion import script) ──
 
