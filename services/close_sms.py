@@ -48,10 +48,15 @@ def _resolve_timezone(tz_choice: Optional[str]) -> tuple[str, str]:
 
     Returns (tz_name, tz_label) — e.g. ("America/New_York", "ET").
     Falls back to America/Phoenix / AZ if empty or unknown.
+
+    Handles Close dropdown values like "AZ (MST, no DST)" or "ET (Eastern)"
+    by extracting the abbreviation before the first space or parenthesis.
     """
     if not tz_choice:
         return DEFAULT_TZ, DEFAULT_TZ_LABEL
-    choice = tz_choice.strip().upper()
+    # Extract the timezone abbreviation — take text before first space or paren
+    # e.g. "AZ (MST, no DST)" → "AZ", "ET (Eastern)" → "ET"
+    choice = tz_choice.strip().split("(")[0].strip().split()[0].upper()
     tz_name = TZ_MAP.get(choice, DEFAULT_TZ)
     tz_label = TZ_LABEL_MAP.get(choice, DEFAULT_TZ_LABEL)
     return tz_name, tz_label
