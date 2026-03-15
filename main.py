@@ -289,6 +289,8 @@ app.include_router(agents.router, prefix="/api/public", tags=["Agents"])
 app.include_router(ad_leads.router, prefix="/api/public", tags=["Ad Leads"])
 app.include_router(sheets_router, prefix="/api/sheets", tags=["Sheets"])
 app.include_router(campaigns.router, prefix="/api/campaigns", tags=["Campaigns"])
+from routers import research
+app.include_router(research.router, prefix="/api/research", tags=["Research"])
 
 # Serve React frontend (built files) — must be LAST so API routes take priority
 frontend_dist = os.path.join(os.path.dirname(__file__), "frontend", "dist")
