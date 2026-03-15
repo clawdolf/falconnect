@@ -261,6 +261,11 @@ async def debug_env():
 
     from config import get_settings
     settings = get_settings()
+    
+    # Check CLOSE_API_KEY specifically
+    close_key_env = os.environ.get("CLOSE_API_KEY", "")
+    close_key_settings = settings.close_api_key
+    
     return {
         "CLERK_SECRET_KEY_set": bool(os.environ.get("CLERK_SECRET_KEY", "")),
         "CLERK_PUBLISHABLE_KEY_set": bool(os.environ.get("CLERK_PUBLISHABLE_KEY", "")),
@@ -271,7 +276,55 @@ async def debug_env():
         "etc_secrets_env_exists": Path("/etc/secrets/.env").is_file(),
         "local_env_exists": Path(".env").is_file(),
         "cwd": os.getcwd(),
+        # Close API key diagnostics
+        "CLOSE_API_KEY_in_environ": bool(close_key_env),
+        "CLOSE_API_KEY_environ_len": len(close_key_env),
+        "CLOSE_API_KEY_in_settings": bool(close_key_settings),
+        "CLOSE_API_KEY_settings_len": len(close_key_settings),
+        "CLOSE_API_KEY_match": close_key_env == close_key_settings if close_key_env and close_key_settings else None,
+        # Google Calendar diagnostics
+        "GOOGLE_REFRESH_TOKEN_in_environ": bool(os.environ.get("GOOGLE_REFRESH_TOKEN", "")),
+        "GOOGLE_REFRESH_TOKEN_in_settings": bool(settings.google_refresh_token),
+        "GOOGLE_CALENDAR_ID_settings": settings.google_calendar_id,
+        # Start command .env file diagnostic
+        "dotenv_contents_keys": [],
     }
+
+
+@app.get("/debug/close-test")
+async def debug_close_test():
+    """Test Close API connectivity from Render."""
+    import httpx
+    from config import get_settings
+    settings = get_settings()
+    api_key = settings.close_api_key
+    
+    result = {
+        "api_key_present": bool(api_key),
+        "api_key_len": len(api_key) if api_key else 0,
+        "api_key_prefix": api_key[:8] if api_key else None,
+    }
+    
+    if not api_key:
+        result["error"] = "No CLOSE_API_KEY in settings"
+        return result
+    
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                "https://api.close.com/api/v1/me/",
+                auth=(api_key, ""),
+            )
+            result["close_api_status"] = resp.status_code
+            if resp.status_code == 200:
+                me = resp.json()
+                result["org_name"] = me.get("organizations", [{}])[0].get("name", "?") if me.get("organizations") else "?"
+            else:
+                result["close_api_body"] = resp.text[:200]
+    except Exception as exc:
+        result["close_api_error"] = str(exc)
+    
+    return result
 
 
 
