@@ -280,7 +280,7 @@ function LeadImport() {
             <span style={{ width: 10, height: 10, borderRadius: '50%', background: dryRun ? 'oklch(15% 0.01 85)' : 'var(--border)', display: 'inline-block' }} />
             {dryRun ? 'DRY RUN ON' : 'DRY RUN OFF'}
           </button>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: dryRun ? 'var(--accent)' : 'var(--text-muted)' }}>{dryRun ? 'No data will be sent to GHL or Notion' : 'Live mode'}</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: dryRun ? 'var(--accent)' : 'var(--text-muted)' }}>{dryRun ? 'No data will be sent to Close.com' : 'Live mode'}</span>
         </div>
         {!dryRun && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem', padding: '0.625rem 0.875rem', background: testMode ? 'oklch(18% 0.04 200 / 0.6)' : 'var(--surface)', border: '1px solid ' + (testMode ? 'oklch(65% 0.15 200)' : 'var(--border)'), borderRadius: 3 }}>
@@ -518,7 +518,7 @@ function LeadImport() {
               <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', display: 'flex', justifyContent: 'center', gap: '1.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
                 <span style={{ color: 'var(--green)' }}>{grandResult.created} created</span>
                 {grandResult.failed > 0 && <span style={{ color: 'var(--red)' }}>{grandResult.failed} failed</span>}
-                {(grandResult.ghlWarnings?.length || 0) > 0 && <span style={{ color: 'var(--amber)' }}>{grandResult.ghlWarnings.length} GHL warnings</span>}
+                {(grandResult.ghlWarnings?.length || 0) > 0 && <span style={{ color: 'var(--amber)' }}>{grandResult.ghlWarnings.length} warnings</span>}
                 {(grandResult.droppedCount || 0) > 0 && <span style={{ color: 'var(--text-muted)' }}>{grandResult.droppedCount} rows dropped</span>}
               </div>
             </div>
@@ -527,7 +527,7 @@ function LeadImport() {
               <div style={{ marginBottom: '1rem' }}>
                 <h4 style={{ fontFamily: 'var(--font-display)', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text)', marginBottom: '0.5rem' }}>Per-File Breakdown</h4>
                 <table className="results-table" style={{ fontSize: '0.7rem' }}>
-                  <thead><tr><th>File</th><th>Created</th><th>Failed</th><th>Dropped</th><th>GHL Warnings</th></tr></thead>
+                  <thead><tr><th>File</th><th>Created</th><th>Failed</th><th>Dropped</th><th>Warnings</th></tr></thead>
                   <tbody>
                     {fileQueue.map((fq, i) => fq.result && (
                       <tr key={i}>
@@ -603,7 +603,7 @@ function LeadImport() {
 
             {grandResult.ghlWarnings && grandResult.ghlWarnings.length > 0 && (
               <div style={{ marginBottom: '1rem' }}>
-                <h4 style={{ fontFamily: 'var(--font-display)', fontSize: '0.75rem', fontWeight: 600, color: 'var(--amber)', marginBottom: '0.5rem' }}>GHL Warnings</h4>
+                <h4 style={{ fontFamily: 'var(--font-display)', fontSize: '0.75rem', fontWeight: 600, color: 'var(--amber)', marginBottom: '0.5rem' }}>Import Warnings</h4>
                 <div style={{ maxHeight: 120, overflow: 'auto' }}>
                   {grandResult.ghlWarnings.slice(0, 10).map((w, i) => (
                     <div key={i} style={{ background: 'oklch(18% 0.04 75)', border: '1px solid oklch(25% 0.05 75)', color: 'var(--amber)', padding: '0.375rem 0.625rem', fontFamily: 'var(--font-mono)', fontSize: '0.7rem', borderRadius: 2, marginTop: i > 0 ? '0.375rem' : 0 }}>
