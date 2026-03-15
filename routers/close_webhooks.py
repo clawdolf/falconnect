@@ -223,11 +223,9 @@ async def _process_appointment(
     """
     settings = get_settings()
 
-    # Custom fields are nested under "custom" in the activity data
-    custom_fields = activity_data.get("custom", {}) or {}
-
-    # Get appointment datetime from custom field
-    appointment_dt_str = custom_fields.get(CF_APPOINTMENT_DATETIME)
+    # Close sends custom fields as flat "custom.cf_XXX" keys at the data level,
+    # NOT as a nested "custom" dict. Extract them directly.
+    appointment_dt_str = activity_data.get(f"custom.{CF_APPOINTMENT_DATETIME}")
     if not appointment_dt_str:
         logger.warning("No appointment_datetime in activity for lead %s", lead_id)
         return {"status": "skipped", "reason": "no appointment_datetime"}
@@ -245,9 +243,9 @@ async def _process_appointment(
         )
         return {"status": "error", "reason": f"invalid datetime: {appointment_dt_str}"}
 
-    # Get timezone choice and notes from custom fields
-    tz_choice = custom_fields.get(CF_APPOINTMENT_TIMEZONE)
-    notes = custom_fields.get(CF_APPOINTMENT_NOTES, "")
+    # Get timezone choice and notes from custom fields (flat "custom.cf_XXX" keys)
+    tz_choice = activity_data.get(f"custom.{CF_APPOINTMENT_TIMEZONE}")
+    notes = activity_data.get(f"custom.{CF_APPOINTMENT_NOTES}", "")
 
     # Resolve contact_id — try activity data first, then look up from lead
     contact_id = activity_data.get("contact_id")
@@ -308,7 +306,7 @@ async def _process_appointment(
             await session.commit()
 
     # --- Step 1: Send SMS (confirmation + schedule reminders) ---
-    sms_results = None
+    sms_results: dict = {"confirmation": None, "reminder_24hr": None, "reminder_1hr": None}
     if phone:
         sms_results = await schedule_appointment_sms(
             lead_id=lead_id,
@@ -317,7 +315,7 @@ async def _process_appointment(
             first_name=first_name,
             appointment_dt=appointment_dt,
             tz_choice=tz_choice,
-        )
+        ) or sms_results  # fallback if schedule_appointment_sms returns None
 
     # --- Step 2: Set up dummy email + GCal event ---
     dummy_email = f"lead-{lead_id}@appointments.falconfinancial.org"
@@ -424,11 +422,9 @@ async def close_webhook(request: Request):
         if not _verify_close_signature(
             raw_body, sig_hash, sig_timestamp, settings.close_webhook_secret
         ):
-            logger.warning("Close webhook signature verification failed")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid webhook signature",
-            )
+            logger.warning("Close webhook signature verification failed — returning 200 to prevent retries")
+            # Return 200 so Close doesn't retry, but don't process the event
+            return {"status": "skipped", "reason": "signature_verification_failed"}
     else:
         logger.warning(
             "CLOSE_WEBHOOK_SECRET not set — skipping signature verification"
