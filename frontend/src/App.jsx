@@ -7,6 +7,7 @@ import Team from './components/Team'
 import SyncManagement from './components/SyncManagement'
 import Analytics from './components/Analytics'
 import Campaigns from './components/Campaigns'
+import Research from './components/Research'
 
 const PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
 const DEV_BYPASS = import.meta.env.VITE_DEV_BYPASS === 'true'
@@ -19,9 +20,10 @@ const NAV_ITEMS = [
   { key: 'sync', label: 'Sync' },
   { key: 'analytics', label: 'Analytics' },
   { key: 'campaigns', label: 'Campaigns' },
+  { key: 'research', label: 'Research' },
 ]
 
-function PageContent({ currentPage }) {
+function PageContent({ currentPage, onNavigate }) {
   switch (currentPage) {
     case 'leads':
       return <LeadImport />
@@ -34,7 +36,9 @@ function PageContent({ currentPage }) {
     case 'analytics':
       return <Analytics />
     case 'campaigns':
-      return <Campaigns />
+      return <Campaigns onNavigate={onNavigate} />
+    case 'research':
+      return <Research onNavigate={onNavigate} />
     default:
       return <Dashboard />
   }
@@ -622,7 +626,7 @@ function AppLayout() {
         )}
       </aside>
       <main className="main-content">
-        <PageContent currentPage={currentPage} />
+        <PageContent currentPage={currentPage} onNavigate={setCurrentPage} />
       </main>
     </div>
   )

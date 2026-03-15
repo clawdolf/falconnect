@@ -43,7 +43,7 @@ function AngleBadge({ angle }) {
   )
 }
 
-function CampaignDetail({ campaignId, authFetch, optimizeResult }) {
+function CampaignDetail({ campaignId, authFetch, optimizeResult, onNavigate }) {
   const [detail, setDetail] = useState(null)
   const [loading, setLoading] = useState(true)
 
@@ -178,13 +178,27 @@ function CampaignDetail({ campaignId, authFetch, optimizeResult }) {
               ))}
             </div>
           )}
+          {onNavigate && (
+            <button
+              onClick={() => onNavigate('research')}
+              style={{
+                marginTop: '0.75rem', background: 'none', border: 'none', cursor: 'pointer',
+                fontFamily: 'var(--font-mono)', fontSize: '0.56rem', color: 'var(--text-muted)',
+                letterSpacing: '0.04em', textDecoration: 'underline', padding: 0,
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)' }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-muted)' }}
+            >
+              View in Research →
+            </button>
+          )}
         </div>
       )}
     </div>
   )
 }
 
-function Campaigns() {
+function Campaigns({ onNavigate }) {
   const { getToken } = useAuth()
   const [campaigns, setCampaigns] = useState([])
   const [loading, setLoading] = useState(true)
@@ -420,7 +434,7 @@ function Campaigns() {
                       </td>
                     </tr>
                     {expandedId === c.id && (
-                      <tr><td colSpan={8} style={{ padding: 0 }}><CampaignDetail campaignId={c.id} authFetch={authFetch} optimizeResult={optimizeResults[c.id]} /></td></tr>
+                      <tr><td colSpan={8} style={{ padding: 0 }}><CampaignDetail campaignId={c.id} authFetch={authFetch} optimizeResult={optimizeResults[c.id]} onNavigate={onNavigate} /></td></tr>
                     )}
                   </React.Fragment>
                 ))}
