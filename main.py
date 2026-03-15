@@ -288,6 +288,10 @@ async def debug_env():
         "GOOGLE_CALENDAR_ID_settings": settings.google_calendar_id,
         # Start command .env file diagnostic
         "dotenv_contents_keys": [],
+        # Raw environ dump — all keys containing CLOSE, GOOGLE, GHL, CLERK
+        "environ_keys_of_interest": sorted([k for k in os.environ.keys() if any(x in k.upper() for x in ("CLOSE", "GOOGLE", "GHL", "CLERK", "DATABASE"))]),
+        # Total environ vars count
+        "total_environ_vars": len(os.environ),
     }
 
 
