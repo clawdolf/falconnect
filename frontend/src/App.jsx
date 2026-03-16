@@ -8,6 +8,7 @@ import SyncManagement from './components/SyncManagement'
 import Analytics from './components/Analytics'
 import Campaigns from './components/Campaigns'
 import Research from './components/Research'
+import SmsTemplates from './components/SmsTemplates'
 
 const PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
 const DEV_BYPASS = import.meta.env.VITE_DEV_BYPASS === 'true'
@@ -21,6 +22,7 @@ const NAV_ITEMS = [
   { key: 'analytics', label: 'Analytics' },
   { key: 'campaigns', label: 'Campaigns' },
   { key: 'research', label: 'Research' },
+  { key: 'sms-templates', label: 'SMS Templates' },
 ]
 
 function PageContent({ currentPage, onNavigate }) {
@@ -39,6 +41,8 @@ function PageContent({ currentPage, onNavigate }) {
       return <Campaigns onNavigate={onNavigate} />
     case 'research':
       return <Research onNavigate={onNavigate} />
+    case 'sms-templates':
+      return <SmsTemplates />
     default:
       return <Dashboard />
   }
