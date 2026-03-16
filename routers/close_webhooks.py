@@ -52,6 +52,9 @@ from services.google_calendar import (
     update_appointment_event,
 )
 
+# Custom field ID for Appointment Status (choices: Booked, Confirmed, Rescheduled, Cancelled, No Show)
+CF_APPOINTMENT_STATUS = "cf_fpLqCQ4At7nrMwzAbHZDGQzgBvvq9WuenxG2PLK1i7u"
+
 logger = logging.getLogger("falconconnect.close_webhooks")
 
 router = APIRouter()
@@ -591,12 +594,41 @@ async def close_webhook(request: Request):
         result = await _handle_appointment_deleted(lead_id)
         return result
 
-    # --- Handle UPDATE with datetime change (reschedule) ---
+    # --- Handle UPDATE ---
     if action == "updated":
         changed_fields = event.get("changed_fields", [])
         datetime_field_key = f"custom.{CF_APPOINTMENT_DATETIME}"
         tz_field_key = f"custom.{CF_APPOINTMENT_TIMEZONE}"
         length_field_key = f"custom.{CF_APPOINTMENT_LENGTH}"
+        status_field_key = f"custom.{CF_APPOINTMENT_STATUS}"
+
+        # --- Status change: Cancelled → delete GCal event + cancel SMS ---
+        if status_field_key in changed_fields:
+            new_status = event_data.get(status_field_key, "")
+            logger.info(
+                "Appointment status changed to '%s' for lead %s",
+                new_status,
+                lead_id,
+            )
+
+            if new_status == "Cancelled":
+                result = await _handle_appointment_deleted(lead_id)
+                return result
+
+            if new_status == "Rescheduled":
+                # Just log — actual reschedule fires when datetime changes
+                logger.info(
+                    "Appointment marked 'Rescheduled' for lead %s — "
+                    "awaiting datetime change to trigger rebooking",
+                    lead_id,
+                )
+                return {
+                    "status": "ok",
+                    "action": "status_change",
+                    "new_status": "Rescheduled",
+                    "lead_id": lead_id,
+                    "note": "Awaiting datetime change to trigger actual rebooking",
+                }
 
         # If appointment datetime, timezone, or length changed → reschedule
         if any(f in changed_fields for f in (datetime_field_key, tz_field_key, length_field_key)):
@@ -609,6 +641,14 @@ async def close_webhook(request: Request):
             result = await _process_appointment(event_data, lead_id)
             return result
 
-    # --- Handle CREATE or non-datetime UPDATE ---
+        # Other field updates on an existing appointment — skip
+        logger.debug(
+            "Ignoring update for lead %s — changed_fields %s don't affect scheduling",
+            lead_id,
+            changed_fields,
+        )
+        return {"status": "skipped", "reason": "non-scheduling field update"}
+
+    # --- Handle CREATE ---
     result = await _process_appointment(event_data, lead_id)
     return result
