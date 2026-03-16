@@ -1,3 +1,21 @@
+/*
+ * Research Dashboard — API Endpoint Map
+ * GET  /api/research/status              → Engine status + last cycle summary (PostgreSQL)
+ * GET  /api/research/ads                 → Ad variants (PostgreSQL: research_ads table)
+ * POST /api/research/ads/:id/approve     → Approve ad (PostgreSQL)
+ * POST /api/research/ads/:id/reject      → Reject ad (PostgreSQL)
+ * GET  /api/research/hypotheses          → Hypothesis log (PostgreSQL: research_hypotheses table)
+ * GET  /api/research/cycles              → Cycle history (PostgreSQL: research_cycles table)
+ * GET  /api/research/playbook            → Playbook markdown (local file)
+ * GET  /api/research/dag/nodes           → DAG nodes (SQLite: falconleads.db)
+ * GET  /api/research/dag/syntheses       → DAG cross-domain syntheses (SQLite)
+ * GET  /api/research/dag/lineage/:id     → DAG lineage traversal (SQLite)
+ * GET  /api/research/performance/split   → SAC vs NONSAC performance (SQLite)
+ * POST /api/research/cycle/trigger       → Queue a cycle (PostgreSQL: research_triggers table)
+ * POST /api/research/sync                → Push cycle results to PostgreSQL (loop auth)
+ * GET  /api/research/triggers/pending    → Check for pending triggers (loop auth)
+ * POST /api/research/triggers/:id/consume → Mark trigger consumed (loop auth)
+ */
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@clerk/clerk-react'
 
@@ -242,12 +260,12 @@ function Research({ onNavigate }) {
     setLoading(true); setErr(null)
     try {
       const [a, b, c, d, e, f, g, h] = await Promise.all([
-        af('/api/research/status'), af('/api/research/mutations/pending'),
+        af('/api/research/status'), af('/api/research/ads?status=pending_approval'),
         af('/api/research/hypotheses?limit=100'), af('/api/research/playbook'),
         af('/api/research/dag/nodes?limit=100'), af('/api/research/dag/syntheses?limit=10'),
         af('/api/research/performance/split'), af('/api/research/cycles?limit=5'),
       ])
-      setSt(a); setPend(b.pending || []); setHypos(c.hypotheses || []); setPb(d)
+      setSt(a); setPend(Array.isArray(b) ? b : b.pending || []); setHypos(c.hypotheses || []); setPb(d)
       setDagN(e.nodes || []); setDagS(f.syntheses || []); setSpl(g); setCyc(h.cycles || [])
     } catch (e) { setErr(e.message) } finally { setLoading(false) }
   }, [af])
@@ -309,12 +327,12 @@ function Research({ onNavigate }) {
   }, [cycleRunning, cycleComplete, af, fetchAll])
   const approve = async id => {
     setAl(p => ({ ...p, ['a' + id]: true }))
-    try { await af('/api/research/mutations/' + id + '/approve', { method: 'POST' }); setPend(p => p.filter(x => x.id !== id)) }
+    try { await af('/api/research/ads/' + id + '/approve', { method: 'POST' }); setPend(p => p.filter(x => x.id !== id)) }
     catch (e) { setErr(e.message) } finally { setAl(p => ({ ...p, ['a' + id]: false })) }
   }
   const reject = async id => {
     setAl(p => ({ ...p, ['r' + id]: true }))
-    try { await af('/api/research/mutations/' + id + '/reject', { method: 'POST' }); setPend(p => p.filter(x => x.id !== id)) }
+    try { await af('/api/research/ads/' + id + '/reject', { method: 'POST' }); setPend(p => p.filter(x => x.id !== id)) }
     catch (e) { setErr(e.message) } finally { setAl(p => ({ ...p, ['r' + id]: false })) }
   }
   const fLin = async nid => {
@@ -408,36 +426,33 @@ function Research({ onNavigate }) {
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr>
-                <th style={ths}>Hypothesis</th><th style={ths}>Category</th><th style={ths}>Status</th>
-                <th style={ths}>CPL</th><th style={ths}>Leads</th><th style={ths}>Confidence</th><th style={ths}>Days</th>
+                <th style={ths}>Hypothesis</th><th style={ths}>Account</th><th style={ths}>Status</th>
+                <th style={ths}>Confidence</th><th style={ths}>Cycle</th><th style={ths}>Created</th>
               </tr></thead>
               <tbody>
                 {fH.map(h => {
                   const ex = exH === h.id
                   const bg = h.status === 'winner' ? 'rgba(34,197,94,0.06)' : h.status === 'loser' ? 'rgba(239,68,68,0.06)' : 'transparent'
+                  const hText = h.hypothesis_text || ''
                   return (
                     <React.Fragment key={h.id}>
                       <tr style={{ cursor: 'pointer', background: bg }} onClick={() => setExH(ex ? null : h.id)}>
                         <td style={{ ...tds, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {(h.hypothesis || '').slice(0, 80)}{(h.hypothesis || '').length > 80 ? '...' : ''}
+                          {hText.slice(0, 80)}{hText.length > 80 ? '...' : ''}
                         </td>
-                        <td style={tds}>{h.category ? <Badge label={h.category} /> : '—'}</td>
+                        <td style={tds}>{h.account_type ? <Badge label={h.account_type} colorKey={h.account_type} /> : '—'}</td>
                         <td style={tds}><Badge label={h.status} /></td>
-                        <td style={{ ...tds, color: h.cpl_result && h.cpl_result < 20 ? '#22c55e' : h.cpl_result > 40 ? '#ef4444' : 'var(--text)' }}>
-                          {h.cpl_result ? fmtCpl(h.cpl_result) : '—'}
-                        </td>
-                        <td style={tds}>{h.leads_generated || 0}</td>
                         <td style={tds}><Cbar value={h.confidence} /></td>
-                        <td style={tds}>{daysBetween(h.test_start_date, h.test_end_date || new Date().toISOString())}</td>
+                        <td style={tds}><span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.52rem', color: 'var(--text-muted)' }}>{h.cycle_id || '—'}</span></td>
+                        <td style={tds}><span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.52rem', color: 'var(--text-muted)' }}>{timeAgo(h.created_at)}</span></td>
                       </tr>
                       {ex && (
-                        <tr><td colSpan={7} style={{ padding: '0.75rem', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
-                          <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.68rem', color: 'var(--text)', margin: '0 0 0.5rem', lineHeight: 1.5 }}>{h.hypothesis}</p>
-                          {h.inspired_by && <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.58rem', color: 'var(--text-muted)', margin: '0 0 0.25rem' }}>Inspired by: {h.inspired_by}</p>}
+                        <tr><td colSpan={6} style={{ padding: '0.75rem', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                          <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.68rem', color: 'var(--text)', margin: '0 0 0.5rem', lineHeight: 1.5 }}>{hText}</p>
                           <div style={{ display: 'flex', gap: '1rem', fontFamily: 'var(--font-mono)', fontSize: '0.58rem', color: 'var(--text-muted)' }}>
-                            {h.test_start_date && <span>Start: {h.test_start_date}</span>}
-                            {h.test_end_date && <span>End: {h.test_end_date}</span>}
-                            {h.ctr_result != null && <span>CTR: {Number(h.ctr_result).toFixed(2)}%</span>}
+                            {h.cycle_id && <span>Cycle: {h.cycle_id}</span>}
+                            {h.created_at && <span>Created: {new Date(h.created_at).toLocaleDateString()}</span>}
+                            {h.confidence != null && <span>Confidence: {(h.confidence * 100).toFixed(0)}%</span>}
                           </div>
                         </td></tr>
                       )}
