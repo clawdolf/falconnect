@@ -4,6 +4,8 @@ Handles:
 - Immediate confirmation SMS on booking
 - Scheduled 24hr and 1hr reminder SMS via Close's date_scheduled API
 - Cancellation of scheduled SMS on rebooking
+- Template loading from DB (editable via admin UI)
+- Smart number routing (call history → area code → geographic fallback)
 """
 
 import logging
@@ -12,6 +14,7 @@ from typing import Optional
 
 import httpx
 import pytz
+from sqlalchemy import select
 
 from config import get_settings
 
@@ -41,6 +44,22 @@ TZ_LABEL_MAP = {
 }
 DEFAULT_TZ = "America/Phoenix"
 DEFAULT_TZ_LABEL = "AZ"
+
+# Default SMS templates — used if DB has no entries yet
+DEFAULT_TEMPLATES: dict[str, str] = {
+    "confirmation": (
+        "Hi {{name}}, your appointment with Seb at Falcon Financial is confirmed "
+        "for {{date}} at {{time}} {{timezone}}."
+    ),
+    "reminder_24hr": (
+        "Hey {{name}}, just a reminder — you have an appointment tomorrow "
+        "at {{time}} {{timezone}}. Talk soon."
+    ),
+    "reminder_1hr": (
+        "Hey {{name}}, your appointment is in 1 hour at {{time}} {{timezone}}. "
+        "See you soon."
+    ),
+}
 
 
 def _resolve_timezone(tz_choice: Optional[str]) -> tuple[str, str]:
@@ -88,28 +107,62 @@ def _format_appointment_time(
     return time_str, day_str
 
 
-# SMS templates
-def _sms_confirmation(first_name: str, day_str: str, time_str: str) -> str:
+# ---------------------------------------------------------------------------
+# Template loading from DB
+# ---------------------------------------------------------------------------
+
+async def _load_template(template_key: str) -> str:
+    """Load an SMS template from the DB. Falls back to hardcoded default."""
+    try:
+        from db.database import _get_session_factory
+        from db.models import SmsTemplate
+
+        async with _get_session_factory()() as session:
+            result = await session.execute(
+                select(SmsTemplate).where(SmsTemplate.template_key == template_key)
+            )
+            tpl = result.scalar_one_or_none()
+            if tpl:
+                return tpl.body
+    except Exception as exc:
+        logger.warning("Failed to load SMS template '%s' from DB: %s", template_key, exc)
+
+    return DEFAULT_TEMPLATES.get(template_key, "")
+
+
+def _render_template(
+    template: str,
+    *,
+    name: str = "",
+    date: str = "",
+    time: str = "",
+    timezone: str = "",
+    phone: str = "",
+) -> str:
+    """Render merge fields in an SMS template."""
     return (
-        f"Hi {first_name}, this is Seb from Falcon Financial. "
-        f"Just confirming our appointment on {day_str} at {time_str}. "
-        f"Looking forward to speaking with you! Reply STOP to opt out."
+        template
+        .replace("{{name}}", name)
+        .replace("{{date}}", date)
+        .replace("{{time}}", time)
+        .replace("{{timezone}}", timezone)
+        .replace("{{phone}}", phone)
     )
 
 
-def _sms_24hr_reminder(first_name: str, time_str: str) -> str:
-    return (
-        f"Hi {first_name}, just a reminder — we have an appointment "
-        f"tomorrow at {time_str}. Talk soon! "
-        f"- Seb, Falcon Financial. Reply STOP to opt out."
-    )
+async def _sms_confirmation(first_name: str, day_str: str, time_str: str, tz_label: str, phone: str = "") -> str:
+    template = await _load_template("confirmation")
+    return _render_template(template, name=first_name, date=day_str, time=time_str, timezone=tz_label, phone=phone)
 
 
-def _sms_1hr_reminder(first_name: str, time_str: str) -> str:
-    return (
-        f"Hi {first_name}, our appointment is in about an hour at {time_str}. "
-        f"Talk soon! - Seb. Reply STOP to opt out."
-    )
+async def _sms_24hr_reminder(first_name: str, time_str: str, tz_label: str, phone: str = "") -> str:
+    template = await _load_template("reminder_24hr")
+    return _render_template(template, name=first_name, time=time_str, timezone=tz_label, phone=phone)
+
+
+async def _sms_1hr_reminder(first_name: str, time_str: str, tz_label: str, phone: str = "") -> str:
+    template = await _load_template("reminder_1hr")
+    return _render_template(template, name=first_name, time=time_str, timezone=tz_label, phone=phone)
 
 
 async def send_sms(
@@ -118,6 +171,7 @@ async def send_sms(
     contact_id: str,
     phone: str,
     text: str,
+    from_number: Optional[str] = None,
     status: str = "inbox",
     date_scheduled: Optional[str] = None,
 ) -> Optional[str]:
@@ -128,6 +182,7 @@ async def send_sms(
         contact_id: Close contact ID
         phone: Recipient phone number (E.164)
         text: SMS message body
+        from_number: Outbound number (resolved by caller via smart routing)
         status: "inbox" for immediate, "scheduled" for future
         date_scheduled: ISO 8601 datetime for scheduled SMS
 
@@ -135,13 +190,12 @@ async def send_sms(
     """
     settings = get_settings()
     api_key = settings.close_api_key
-    from_number = settings.close_sms_from_number
 
     if not api_key:
         logger.error("CLOSE_API_KEY not configured — cannot send SMS")
         return None
     if not from_number:
-        logger.error("CLOSE_SMS_FROM_NUMBER not configured — cannot send SMS")
+        logger.error("No from_number provided — cannot send SMS for lead %s", lead_id)
         return None
 
     payload = {
@@ -168,9 +222,10 @@ async def send_sms(
             sms_data = resp.json()
             sms_id = sms_data.get("id")
             logger.info(
-                "SMS %s (status=%s) to %s: %s",
+                "SMS %s (status=%s) from %s to %s: %s",
                 sms_id,
                 status,
+                from_number,
                 phone,
                 text[:60],
             )
@@ -231,9 +286,14 @@ async def schedule_appointment_sms(
 ) -> dict[str, Optional[str]]:
     """Schedule all three SMS messages for an appointment.
 
+    Uses smart number routing (call history → area code → geographic fallback)
+    and loads templates from DB.
+
     Returns dict with keys: confirmation, reminder_24hr, reminder_1hr
     Each value is the SMS activity ID or None on failure.
     """
+    from services.sms_routing import resolve_sms_from_number
+
     tz_name, tz_label = _resolve_timezone(tz_choice)
     time_str, day_str = _format_appointment_time(appointment_dt, tz_name, tz_label)
 
@@ -243,25 +303,44 @@ async def schedule_appointment_sms(
         "reminder_1hr": None,
     }
 
+    # Resolve outbound number via smart routing
+    from_number = await resolve_sms_from_number(lead_id, phone)
+    if not from_number:
+        logger.warning(
+            "No outbound number resolved for lead %s / phone %s — skipping all SMS",
+            lead_id,
+            phone,
+        )
+        return results
+
+    logger.info(
+        "SMS routing resolved: lead=%s prospect=%s → from=%s",
+        lead_id,
+        phone,
+        from_number,
+    )
+
     # 1. Confirmation SMS — send immediately
-    confirmation_text = _sms_confirmation(first_name, day_str, time_str)
+    confirmation_text = await _sms_confirmation(first_name, day_str, time_str, tz_label, phone)
     results["confirmation"] = await send_sms(
         lead_id=lead_id,
         contact_id=contact_id,
         phone=phone,
         text=confirmation_text,
+        from_number=from_number,
         status="inbox",
     )
 
     # 2. 24hr reminder — scheduled
     reminder_24hr_dt = appointment_dt - timedelta(hours=24)
     if reminder_24hr_dt > datetime.now(pytz.utc):
-        reminder_24hr_text = _sms_24hr_reminder(first_name, time_str)
+        reminder_24hr_text = await _sms_24hr_reminder(first_name, time_str, tz_label, phone)
         results["reminder_24hr"] = await send_sms(
             lead_id=lead_id,
             contact_id=contact_id,
             phone=phone,
             text=reminder_24hr_text,
+            from_number=from_number,
             status="scheduled",
             date_scheduled=reminder_24hr_dt.isoformat(),
         )
@@ -274,12 +353,13 @@ async def schedule_appointment_sms(
     # 3. 1hr reminder — scheduled
     reminder_1hr_dt = appointment_dt - timedelta(hours=1)
     if reminder_1hr_dt > datetime.now(pytz.utc):
-        reminder_1hr_text = _sms_1hr_reminder(first_name, time_str)
+        reminder_1hr_text = await _sms_1hr_reminder(first_name, time_str, tz_label, phone)
         results["reminder_1hr"] = await send_sms(
             lead_id=lead_id,
             contact_id=contact_id,
             phone=phone,
             text=reminder_1hr_text,
+            from_number=from_number,
             status="scheduled",
             date_scheduled=reminder_1hr_dt.isoformat(),
         )
