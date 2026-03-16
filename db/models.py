@@ -240,6 +240,33 @@ class CampaignVariant(Base):
     campaign = relationship("Campaign", back_populates="variants")
 
 
+class SmsTemplate(Base):
+    """Editable SMS templates for appointment reminders."""
+
+    __tablename__ = "sms_templates"
+
+    id: int = Column(Integer, primary_key=True, autoincrement=True)
+    template_key: str = Column(String(32), unique=True, nullable=False, index=True)
+    body: str = Column(Text, nullable=False)
+    created_at: datetime = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at: datetime = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class PhoneNumber(Base):
+    """Outbound phone number pool for smart SMS routing."""
+
+    __tablename__ = "phone_numbers"
+
+    id: int = Column(Integer, primary_key=True, autoincrement=True)
+    number: str = Column(String(20), unique=True, nullable=False, index=True)
+    state: str = Column(String(2), nullable=False)
+    area_codes_json: str = Column(Text, nullable=False)  # JSON array of ints
+    is_active: bool = Column(Boolean, default=True)
+    created_at: datetime = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class ResearchTrigger(Base):
     """Research cycle trigger queue — written by dashboard, consumed by local loop."""
 

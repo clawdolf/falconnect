@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from db.database import init_db
 from routers import leads, webhooks, calendar, analytics, admin, sync, licenses, agents, campaigns, ad_leads, close_webhooks
 from routers.sheets import router as sheets_router
+from routers.sms_templates import router as sms_templates_router
 from services.notion_ghl_sync import sync_loop
 
 logging.basicConfig(
@@ -106,6 +107,85 @@ async def _dedup_licenses() -> None:
         logger.warning("License cleanup failed (non-fatal): %s", exc)
 
 
+async def _seed_sms_templates() -> None:
+    """Seed default SMS templates if table is empty. Idempotent."""
+    from sqlalchemy import text
+    try:
+        from db.database import _get_session_factory as _sf
+        from services.close_sms import DEFAULT_TEMPLATES
+
+        async with _sf()() as session:
+            result = await session.execute(text("SELECT COUNT(*) FROM sms_templates"))
+            if result.scalar() == 0:
+                logger.info("Seeding default SMS templates")
+                for key, body in DEFAULT_TEMPLATES.items():
+                    await session.execute(
+                        text(
+                            "INSERT INTO sms_templates (template_key, body, created_at, updated_at) "
+                            "VALUES (:key, :body, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                        ),
+                        {"key": key, "body": body},
+                    )
+                await session.commit()
+                logger.info("SMS template seed complete — %d templates", len(DEFAULT_TEMPLATES))
+            else:
+                logger.info("SMS templates already seeded — skipping")
+    except Exception as exc:
+        logger.warning("SMS template seed failed (non-fatal): %s", exc)
+
+
+async def _seed_phone_numbers() -> None:
+    """Seed phone number pool if table is empty. Idempotent."""
+    import json
+    from sqlalchemy import text
+    try:
+        from db.database import _get_session_factory as _sf
+
+        NUMBER_POOL = [
+            {"number": "+14809999040", "state": "AZ", "area_codes": [480]},
+            {"number": "+14066463344", "state": "MT", "area_codes": [406]},
+            {"number": "+19808909888", "state": "NC", "area_codes": [980, 984]},
+            {"number": "+12078881046", "state": "ME", "area_codes": [207]},
+            {"number": "+12078087772", "state": "ME", "area_codes": [207]},
+            {"number": "+19133793347", "state": "KS", "area_codes": [913]},
+            {"number": "+19719993141", "state": "OR", "area_codes": [971, 541]},
+            {"number": "+15419195227", "state": "OR", "area_codes": [541, 971]},
+            {"number": "+18323042324", "state": "TX", "area_codes": [832, 469, 972]},
+            {"number": "+14699492579", "state": "TX", "area_codes": [469, 832, 972]},
+            {"number": "+12156077444", "state": "PA", "area_codes": [215]},
+            {"number": "+19843685120", "state": "NC", "area_codes": [984, 980]},
+            {"number": "+12076067024", "state": "ME", "area_codes": [207]},
+            {"number": "+17862548006", "state": "FL", "area_codes": [786, 305, 954]},
+            {"number": "+17867677634", "state": "FL", "area_codes": [786, 305, 954]},
+            {"number": "+18322420926", "state": "TX", "area_codes": [832, 469, 972]},
+            {"number": "+18326482428", "state": "TX", "area_codes": [832, 469, 972]},
+            {"number": "+19727341666", "state": "TX", "area_codes": [972, 469, 832]},
+        ]
+
+        async with _sf()() as session:
+            result = await session.execute(text("SELECT COUNT(*) FROM phone_numbers"))
+            if result.scalar() == 0:
+                logger.info("Seeding phone number pool (%d numbers)", len(NUMBER_POOL))
+                for entry in NUMBER_POOL:
+                    await session.execute(
+                        text(
+                            "INSERT INTO phone_numbers (number, state, area_codes_json, is_active, created_at) "
+                            "VALUES (:number, :state, :area_codes_json, 1, CURRENT_TIMESTAMP)"
+                        ),
+                        {
+                            "number": entry["number"],
+                            "state": entry["state"],
+                            "area_codes_json": json.dumps(entry["area_codes"]),
+                        },
+                    )
+                await session.commit()
+                logger.info("Phone number seed complete — %d numbers", len(NUMBER_POOL))
+            else:
+                logger.info("Phone numbers already seeded — skipping")
+    except Exception as exc:
+        logger.warning("Phone number seed failed (non-fatal): %s", exc)
+
+
 async def _fix_agent_user_id() -> None:
     """Ensure agents.user_id matches the canonical Clerk ID (licenses.user_id).
 
@@ -197,6 +277,10 @@ async def lifespan(app: FastAPI):
     # Seed Seb's licenses if empty (idempotent), then dedup any duplicates
     await _seed_licenses_if_empty()
     await _dedup_licenses()
+
+    # Seed SMS templates and phone number pool
+    await _seed_sms_templates()
+    await _seed_phone_numbers()
 
     # Start background Notion → GHL sync loop (disabled 2026-03-15 — was blocking app startup)
     # sync_task = asyncio.create_task(sync_loop())
@@ -336,6 +420,7 @@ app.include_router(ad_leads.router, prefix="/api/public", tags=["Ad Leads"])
 app.include_router(sheets_router, prefix="/api/sheets", tags=["Sheets"])
 app.include_router(campaigns.router, prefix="/api/campaigns", tags=["Campaigns"])
 app.include_router(close_webhooks.router, prefix="/webhooks", tags=["Close Webhooks"])
+app.include_router(sms_templates_router, prefix="/api", tags=["SMS Templates"])
 from routers import research
 app.include_router(research.router, prefix="/api/research", tags=["Research"])
 
