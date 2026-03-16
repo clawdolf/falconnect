@@ -137,9 +137,55 @@ async def _fix_agent_user_id() -> None:
         logger.warning("Agent user_id fix failed (non-fatal): %s", exc)
 
 
+def _validate_critical_env() -> None:
+    """Check critical env vars at startup and log warnings for any missing.
+
+    This is a diagnostic guard — the app still starts, but operators get
+    clear log output about what will break if vars are absent.
+    """
+    from config import get_settings
+
+    settings = get_settings()
+    critical = {
+        "CLOSE_API_KEY": bool(settings.close_api_key),
+        "CLOSE_WEBHOOK_SECRET": bool(settings.close_webhook_secret),
+        "CLOSE_APPOINTMENT_ACTIVITY_TYPE_ID": bool(settings.close_appointment_activity_type_id),
+        "GOOGLE_CLIENT_ID": bool(settings.google_client_id),
+        "GOOGLE_CLIENT_SECRET": bool(settings.google_client_secret),
+        "GOOGLE_REFRESH_TOKEN": bool(settings.google_refresh_token),
+        "CLERK_SECRET_KEY": bool(settings.clerk_secret_key),
+        "CLERK_PUBLISHABLE_KEY": bool(settings.clerk_publishable_key),
+        "DATABASE_URL": bool(settings.database_url),
+        "GHL_API_KEY": bool(settings.ghl_api_key),
+    }
+    missing = [k for k, present in critical.items() if not present]
+
+    # Also report which .env files were loaded
+    from pathlib import Path
+    env_files = [p for p in [".env", "/etc/secrets/.env"] if Path(p).is_file()]
+    logger.info("STARTUP ENV — .env files found: %s", env_files or "(none)")
+
+    if missing:
+        logger.warning(
+            "STARTUP WARNING — %d critical env var(s) missing: %s",
+            len(missing),
+            missing,
+        )
+        logger.warning(
+            "Features will degrade. If on Render, check the Secret File "
+            "(/etc/secrets/.env) — it is the primary config source. "
+            "Render Dashboard env-vars are overrides only."
+        )
+    else:
+        logger.info("STARTUP OK — all %d critical env vars present", len(critical))
+
+
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
     logger.info("FalconConnect v3 starting up …")
+
+    # Validate critical env vars before anything else
+    _validate_critical_env()
 
     # init_db() runs create_all (idempotent — creates missing tables, skips existing)
     # Alembic migrations ran at build time; this is a fast safety net only.
