@@ -48,7 +48,7 @@ async def _seed_licenses_if_empty() -> None:
                         text(
                             "INSERT INTO licenses (user_id, state, state_abbreviation, license_number, "
                             "verify_url, needs_manual_verification, status, license_type, created_at, updated_at) "
-                            "VALUES (:uid, :state, :abbr, :lic_num, :verify_url, :manual, 'active', 'insurance_producer', NOW(), NOW())"
+                            "VALUES (:uid, :state, :abbr, :lic_num, :verify_url, :manual, 'active', 'insurance_producer', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
                         ),
                         {"uid": SEB_USER_ID, "state": state, "abbr": abbr, "lic_num": lic_num, "verify_url": verify_url, "manual": manual},
                     )
@@ -368,7 +368,7 @@ async def seed_licenses_now():
                         text(
                             "INSERT INTO licenses (user_id, state, state_abbreviation, license_number, "
                             "verify_url, needs_manual_verification, status, license_type, created_at, updated_at) "
-                            "VALUES (:uid,:state,:abbr,:lic_num,:verify_url,:manual,'active','insurance_producer',NOW(),NOW())"
+                            "VALUES (:uid,:state,:abbr,:lic_num,:verify_url,:manual,'active','insurance_producer',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
                         ),
                         {"uid": SEB_UID, "state": state, "abbr": abbr, "lic_num": lic_num,
                          "verify_url": verify_url, "manual": manual}
