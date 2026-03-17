@@ -55,8 +55,9 @@ async def create_appointment_event(
     description: str,
     start_dt: datetime,
     duration_minutes: int = 30,
-    attendee_email: Optional[str] = None,
     calendar_id: Optional[str] = None,
+    close_lead_id: Optional[str] = None,
+    close_contact_id: Optional[str] = None,
 ) -> Optional[str]:
     """Create a Google Calendar event for an appointment.
 
@@ -65,8 +66,9 @@ async def create_appointment_event(
         description: Event description/notes
         start_dt: Appointment start time (timezone-aware)
         duration_minutes: Event duration (default 30 min)
-        attendee_email: Dummy email to add as attendee for Close linking
         calendar_id: Google Calendar ID (defaults to settings)
+        close_lead_id: Close lead ID stored as extended property for linking
+        close_contact_id: Close contact ID stored as extended property for linking
 
     Returns: Google Calendar event ID on success, None on failure.
     """
@@ -96,14 +98,17 @@ async def create_appointment_event(
         },
     }
 
-    if attendee_email:
-        event_body["attendees"] = [
-            {"email": attendee_email, "responseStatus": "accepted"},
-        ]
-        # Don't send invitation emails to the dummy address
-        send_updates = "none"
-    else:
-        send_updates = "none"
+    # Store Close IDs as extended properties for GCal ↔ Close linking
+    # (replaces old dummy attendee email approach that caused bounce emails)
+    private_props = {}
+    if close_lead_id:
+        private_props["close_lead_id"] = close_lead_id
+    if close_contact_id:
+        private_props["close_contact_id"] = close_contact_id
+    if private_props:
+        event_body["extendedProperties"] = {"private": private_props}
+
+    send_updates = "none"
 
     try:
         service = _get_calendar_service()
