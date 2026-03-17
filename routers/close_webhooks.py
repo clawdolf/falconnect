@@ -3,9 +3,8 @@
 Receives Close webhook events, validates HMAC-SHA256 signature, and for
 matching appointment activities:
 1. Sends confirmation SMS + schedules 24hr/1hr reminders via Close SMS API
-2. Creates a Google Calendar event with a dummy attendee email
-3. PATCHes the dummy email onto the Close contact for calendar-to-lead linking
-4. Handles rebooking (cancel old SMS + GCal, create new)
+2. Creates a Google Calendar event with Close IDs stored as extended properties
+3. Handles rebooking (cancel old SMS + GCal, create new)
 
 Close webhook payload structure (from their docs):
 {
@@ -38,7 +37,7 @@ from sqlalchemy import select
 
 from config import get_settings
 from db.database import _get_session_factory
-from db.models import AppointmentCalendarEmail, AppointmentReminder
+from db.models import AppointmentReminder
 from services.close_sms import (
     CF_APPOINTMENT_DATETIME,
     CF_APPOINTMENT_NOTES,
@@ -49,7 +48,6 @@ from services.close_sms import (
 from services.google_calendar import (
     create_appointment_event,
     delete_event,
-    update_appointment_event,
 )
 
 # Custom field ID for Appointment Status (choices: Booked, Confirmed, Rescheduled, Cancelled, No Show)
@@ -156,59 +154,6 @@ async def _get_contact_details(contact_id: str) -> Optional[dict]:
     except Exception as exc:
         logger.error("Failed to fetch contact %s: %s", contact_id, exc)
         return None
-
-
-async def _patch_contact_add_calendar_email(
-    contact_id: str,
-    dummy_email: str,
-    existing_emails: list[dict],
-) -> bool:
-    """Add the dummy calendar email to a Close contact's email list.
-
-    Merges with existing emails — never overwrites. Uses type "Calendar"
-    for the dummy email entry. Skips if already present.
-    """
-    settings = get_settings()
-    api_key = settings.close_api_key
-    if not api_key:
-        return False
-
-    # Check if dummy email is already on the contact
-    for entry in existing_emails:
-        if entry.get("email", "").lower() == dummy_email.lower():
-            logger.info(
-                "Dummy email %s already on contact %s — skipping PATCH",
-                dummy_email,
-                contact_id,
-            )
-            return True
-
-    # Append to existing emails
-    updated_emails = list(existing_emails) + [
-        {"email": dummy_email, "type": "Calendar"}
-    ]
-
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.put(
-                f"{CLOSE_API_BASE}/contact/{contact_id}/",
-                json={"emails": updated_emails},
-                auth=(api_key, ""),
-            )
-            resp.raise_for_status()
-            logger.info(
-                "Added calendar email %s to contact %s",
-                dummy_email,
-                contact_id,
-            )
-            return True
-    except Exception as exc:
-        logger.error(
-            "Failed to add calendar email to contact %s: %s",
-            contact_id,
-            exc,
-        )
-        return False
 
 
 def _extract_first_name(contact_name: str) -> str:
@@ -354,14 +299,7 @@ async def _process_appointment(
             tz_choice=tz_choice,
         ) or sms_results  # fallback if schedule_appointment_sms returns None
 
-    # --- Step 2: Set up dummy email + GCal event ---
-    dummy_email = f"lead-{lead_id}@cal.falconnect.org"
-
-    # Add dummy email to contact (merge, don't overwrite)
-    existing_emails = contact.get("emails", [])
-    await _patch_contact_add_calendar_email(contact_id, dummy_email, existing_emails)
-
-    # Create Google Calendar event (duration from appointment length field)
+    # --- Step 2: Create GCal event with extended properties for Close linking ---
     gcal_event_id = await create_appointment_event(
         summary=f"Call with {contact_name or lead_id}",
         description=(
@@ -373,7 +311,8 @@ async def _process_appointment(
         ),
         start_dt=appointment_dt,
         duration_minutes=duration_minutes,
-        attendee_email=dummy_email,
+        close_lead_id=lead_id,
+        close_contact_id=contact_id,
     )
 
     # --- Step 3: Save to database ---
@@ -390,24 +329,6 @@ async def _process_appointment(
             status="active",
         )
         session.add(reminder)
-
-        # Upsert calendar email mapping
-        result = await session.execute(
-            select(AppointmentCalendarEmail).where(
-                AppointmentCalendarEmail.lead_id == lead_id,
-            )
-        )
-        existing_cal_email = result.scalar_one_or_none()
-        if existing_cal_email:
-            existing_cal_email.gcal_event_id = gcal_event_id
-        else:
-            cal_email = AppointmentCalendarEmail(
-                lead_id=lead_id,
-                contact_id=contact_id,
-                dummy_email=dummy_email,
-                gcal_event_id=gcal_event_id,
-            )
-            session.add(cal_email)
 
         await session.commit()
 
@@ -427,7 +348,6 @@ async def _process_appointment(
         "appointment_datetime": appointment_dt.isoformat(),
         "sms": sms_results,
         "gcal_event_id": gcal_event_id,
-        "dummy_email": dummy_email,
     }
 
 

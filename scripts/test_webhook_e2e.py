@@ -145,7 +145,7 @@ async def test_e2e_live():
         if result.get("status") == "ok":
             print("\n✓ E2E TEST PASSED — GCal event created!")
             print(f"  Event ID: {result.get('gcal_event_id')}")
-            print(f"  Dummy email: {result.get('dummy_email')}")
+            print(f"  Lead ID: {result.get('lead_id')}")
         else:
             print(f"\n❌ E2E TEST FAILED — status: {result.get('status')}, reason: {result.get('reason')}")
     except Exception as exc:
