@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useAuth } from '@clerk/clerk-react'
 
 const STATE_MAP = {
   'Alabama': 'AL', 'Alaska': 'AK', 'Arizona': 'AZ', 'Arkansas': 'AR', 'California': 'CA',
@@ -137,7 +138,7 @@ function Licenses() {
   const [editData, setEditData] = useState({})
 
   let getToken = null
-  try { const { useAuth } = require('@clerk/clerk-react'); const auth = useAuth(); getToken = auth.getToken } catch { /* no-op */ }
+  try { const auth = useAuth(); getToken = auth.getToken } catch {}
 
   const getHeaders = async () => {
     const headers = { 'Content-Type': 'application/json' }
