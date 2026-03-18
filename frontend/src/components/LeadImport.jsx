@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useMemo } from 'react'
+import { useAuth } from '@clerk/clerk-react'
 import * as XLSX from 'xlsx'
 import {
   VENDOR_TIERS, NEEDS_LEAD_AGE, VENDOR_AGE_BUCKETS, LEAD_TYPES, LEAD_VENDORS,
@@ -32,7 +33,7 @@ function LeadImport() {
   const [adjustAge, setAdjustAge] = useState(false)
 
   let getToken = null
-  try { const { useAuth } = require('@clerk/clerk-react'); const auth = useAuth(); getToken = auth.getToken } catch {}
+  try { const auth = useAuth(); getToken = auth.getToken } catch {}
 
   const getAuthHeaders = async () => {
     const h = { 'Content-Type': 'application/json' }
