@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     notion_ghl_sync_after_date: str = "2026-03-03"
     notion_ghl_sync_interval: int = 300
 
+    # --- Calendar Email Domain (for dummy GCal ↔ Close linking emails) ---
+    calendar_email_domain: str = "appt.invalid"
+
     # --- Close.com ---
     close_api_key: str = ""
     close_appointment_activity_type_id: str = "actitype_6awVkZoRuXH1FWUd1F97CH"
