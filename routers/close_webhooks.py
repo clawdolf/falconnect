@@ -552,6 +552,15 @@ async def close_webhook(request: Request):
     sig_timestamp = request.headers.get("close-sig-timestamp")
 
     if settings.close_webhook_secret:
+        # Defensive check: Close webhook secrets are 64-char hex strings.
+        # Truncation (e.g. from Render dashboard paste) causes silent signature failures.
+        if len(settings.close_webhook_secret) != 64:
+            logger.error(
+                "CLOSE_WEBHOOK_SECRET has wrong length (%d chars, expected 64). "
+                "Likely truncated when pasted into Render env vars. "
+                "All webhooks will fail signature verification until this is fixed.",
+                len(settings.close_webhook_secret),
+            )
         if not _verify_close_signature(
             raw_body, sig_hash, sig_timestamp, settings.close_webhook_secret
         ):
