@@ -224,10 +224,8 @@ async def mute_participant(
     call_sid = _get_participant_sid(conf, participant)
     if not call_sid:
         raise ValueError(f"No call SID for participant {participant}")
-
-    await twilio_client.update_participant(
-        conf.conference_sid, call_sid, muted=True
-    )
+    real_sid = await _resolve_conference_sid(conf)
+    await twilio_client.update_participant(real_sid, call_sid, muted=True)
     return {"participant": participant, "muted": True}
 
 
@@ -241,10 +239,8 @@ async def unmute_participant(
     call_sid = _get_participant_sid(conf, participant)
     if not call_sid:
         raise ValueError(f"No call SID for participant {participant}")
-
-    await twilio_client.update_participant(
-        conf.conference_sid, call_sid, muted=False
-    )
+    real_sid = await _resolve_conference_sid(conf)
+    await twilio_client.update_participant(real_sid, call_sid, muted=False)
     return {"participant": participant, "muted": False}
 
 
@@ -258,10 +254,8 @@ async def hold_participant(
     call_sid = _get_participant_sid(conf, participant)
     if not call_sid:
         raise ValueError(f"No call SID for participant {participant}")
-
-    await twilio_client.update_participant(
-        conf.conference_sid, call_sid, hold=True, hold_url=HOLD_MUSIC_URL
-    )
+    real_sid = await _resolve_conference_sid(conf)
+    await twilio_client.update_participant(real_sid, call_sid, hold=True, hold_url=HOLD_MUSIC_URL)
     return {"participant": participant, "on_hold": True}
 
 
@@ -275,10 +269,8 @@ async def unhold_participant(
     call_sid = _get_participant_sid(conf, participant)
     if not call_sid:
         raise ValueError(f"No call SID for participant {participant}")
-
-    await twilio_client.update_participant(
-        conf.conference_sid, call_sid, hold=False
-    )
+    real_sid = await _resolve_conference_sid(conf)
+    await twilio_client.update_participant(real_sid, call_sid, hold=False)
     return {"participant": participant, "on_hold": False}
 
 
@@ -288,12 +280,25 @@ async def end_conference_session(
 ) -> Dict[str, Any]:
     """End the conference — hang up all participants, log to Close."""
     conf = await _get_conference(session, conf_id)
+    real_sid = await _resolve_conference_sid(conf)
 
     # End the Twilio conference (hangs up all legs)
     try:
-        await twilio_client.end_conference(conf.conference_sid)
+        await twilio_client.end_conference(real_sid)
     except Exception as e:
-        logger.warning("Error ending Twilio conference: %s", e)
+        logger.warning("Error ending Twilio conference via SID %s: %s", real_sid, e)
+
+    # Belt-and-suspenders: individually hang up each call leg
+    for label, call_sid in [
+        ("seb", conf.seb_participant_sid),
+        ("lead", conf.lead_participant_sid),
+        ("carrier", conf.carrier_participant_sid),
+    ]:
+        if call_sid:
+            try:
+                await twilio_client.delete_participant(real_sid, call_sid)
+            except Exception:
+                pass  # Already hung up is fine
 
     # Calculate duration
     now = datetime.now(timezone.utc)
@@ -411,6 +416,34 @@ async def update_conference_sid(
 # ── Private helpers ──
 
 
+async def _resolve_conference_sid(conf: ConferenceSession) -> str:
+    """Return the real Twilio CF... SID for mute/hold/end operations.
+
+    conference_sid starts as the friendly name (fc-bridge-xxxx) and is updated
+    to the real CF... SID via status callback. If the callback hasn't fired yet,
+    look it up from Twilio directly by friendly name.
+    """
+    sid = conf.conference_sid or ""
+    if sid.startswith("CF"):
+        return sid
+
+    try:
+        from urllib.parse import quote
+        url = f"{twilio_client._account_url()}/Conferences.json?FriendlyName={quote(sid)}&Status=in-progress"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, headers=twilio_client._auth_header())
+            if resp.is_success:
+                conferences = resp.json().get("conferences", [])
+                if conferences:
+                    real_sid = conferences[0]["sid"]
+                    logger.info("Resolved %s → %s", sid, real_sid)
+                    return real_sid
+    except Exception as e:
+        logger.warning("Could not resolve conference SID: %s", e)
+
+    return sid  # Fall back to friendly name
+
+
 async def _get_conference(session: AsyncSession, conf_id: str) -> ConferenceSession:
     result = await session.execute(
         select(ConferenceSession).where(ConferenceSession.id == conf_id)
@@ -442,18 +475,42 @@ async def _log_to_close(conf: ConferenceSession) -> None:
         return
 
     duration = conf.call_duration_seconds or 0
+
+    # Fetch Twilio recording URL if available
+    recording_url = ""
+    if conf.conference_sid and conf.conference_sid.startswith("CF"):
+        try:
+            url = f"{twilio_client._account_url()}/Conferences/{conf.conference_sid}/Recordings.json"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(url, headers=twilio_client._auth_header())
+                if r.is_success:
+                    recs = r.json().get("recordings", [])
+                    if recs:
+                        rec_sid = recs[0]["sid"]
+                        acct_sid = get_settings().twilio_account_sid
+                        recording_url = f"https://api.twilio.com/2010-04-01/Accounts/{acct_sid}/Recordings/{rec_sid}.mp3"
+        except Exception as e:
+            logger.warning("Could not fetch Twilio recording: %s", e)
+
     note = (
         f"3-way carrier conference via FC Bridge. "
         f"Carrier: {conf.carrier_phone}. "
-        f"Participants: Seb ({conf.seb_phone}), Lead ({conf.lead_phone}), Carrier."
+        f"Duration: {duration}s."
     )
+    if recording_url:
+        note += f"\nRecording: {recording_url}"
 
+    # Close AI transcription only works on natively-recorded Close calls.
+    # This logs as a call activity linked to the lead so it appears in the timeline.
+    # For remote_phone, use lead's number so Close can match it to the contact.
     payload = {
         "lead_id": conf.lead_id,
         "direction": "outbound",
         "duration": duration,
         "note": note,
         "status": "completed",
+        "remote_phone": conf.lead_phone,
+        "phone": "+14809999040",  # Seb's Close number — shows as outbound from this line
     }
 
     async with httpx.AsyncClient(timeout=15.0) as client:
