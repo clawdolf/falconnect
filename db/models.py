@@ -267,6 +267,27 @@ class ResearchTrigger(Base):
     notes: str = Column(Text, nullable=True)
 
 
+class ConferenceSession(Base):
+    """PSTN conference bridge sessions — 3-way calls (Seb + Lead + Carrier)."""
+
+    __tablename__ = "conference_sessions"
+
+    id: str = Column(String(36), primary_key=True, default=lambda: str(__import__("uuid").uuid4()))
+    conference_sid: str = Column(String(128), nullable=True, index=True)
+    lead_id: str = Column(String(128), nullable=True)
+    lead_phone: str = Column(String(20), nullable=False)
+    carrier_phone: str = Column(String(20), nullable=False)
+    seb_phone: str = Column(String(20), nullable=False)
+    seb_participant_sid: str = Column(String(128), nullable=True)
+    lead_participant_sid: str = Column(String(128), nullable=True)
+    carrier_participant_sid: str = Column(String(128), nullable=True)
+    status: str = Column(String(32), default="initiating", index=True)
+    started_at: datetime = Column(DateTime(timezone=True), server_default=func.now())
+    ended_at: datetime = Column(DateTime(timezone=True), nullable=True)
+    call_duration_seconds: int = Column(Integer, nullable=True)
+    close_activity_logged: bool = Column(Boolean, default=False)
+
+
 class ResearchCycle(Base):
     """Research cycle records — synced from Mac Mini SQLite after each cycle."""
 
