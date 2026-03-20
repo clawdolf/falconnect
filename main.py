@@ -259,6 +259,15 @@ def _validate_critical_env() -> None:
     else:
         logger.info("STARTUP OK — all %d critical env vars present", len(critical))
 
+    # Validate webhook secret length (Close uses 64-char hex strings)
+    if settings.close_webhook_secret and len(settings.close_webhook_secret) != 64:
+        logger.error(
+            "STARTUP ERROR — CLOSE_WEBHOOK_SECRET is %d chars (expected 64). "
+            "Likely truncated in Render dashboard. ALL webhooks will fail "
+            "signature verification until fixed!",
+            len(settings.close_webhook_secret),
+        )
+
 
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
@@ -426,8 +435,6 @@ async def debug_env():
         "settings_clerk_configured": bool(settings.clerk_secret_key),
         "settings_close_configured": bool(settings.close_api_key),
         "settings_gcal_configured": bool(settings.google_refresh_token),
-        "CLOSE_WEBHOOK_SECRET_len": len(settings.close_webhook_secret) if settings.close_webhook_secret else 0,
-        "CLOSE_WEBHOOK_SECRET_set": bool(settings.close_webhook_secret),
         "cwd": os.getcwd(),
     }
 
@@ -487,97 +494,6 @@ async def health_gcal():
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )
-
-
-@app.get("/debug/gcal-test")
-async def debug_gcal_test():
-    """Diagnostic: test Google Calendar event creation and return full error."""
-    import traceback as tb
-    from datetime import timedelta
-    from services.google_calendar import _get_calendar_service, create_appointment_event, delete_event
-
-    results = {"service_ok": False, "event_ok": False}
-
-    # Step 1: test service build
-    try:
-        service = _get_calendar_service()
-        results["service_ok"] = True
-        cals = service.calendarList().list(maxResults=1).execute()
-        results["calendar_count"] = len(cals.get("items", []))
-    except Exception as e:
-        results["service_error"] = f"{type(e).__name__}: {e}"
-        results["service_traceback"] = tb.format_exc()
-
-    # Step 2: test event creation (same flow as webhook)
-    try:
-        from datetime import timezone
-        start_dt = datetime.now(timezone.utc) + timedelta(hours=2)
-        event_id = await create_appointment_event(
-            summary="[DIAG] GCal Test",
-            description="Diagnostic — safe to delete",
-            start_dt=start_dt,
-            duration_minutes=15,
-            attendee_email="diag-test@cal.falconnect.org",
-        )
-        results["event_id"] = event_id
-        results["event_ok"] = event_id is not None
-        if event_id:
-            await delete_event(event_id)
-            results["cleanup"] = "deleted"
-    except Exception as e:
-        results["event_error"] = f"{type(e).__name__}: {e}"
-        results["event_traceback"] = tb.format_exc()
-
-    return results
-
-
-@app.get("/debug/appointment-records")
-async def debug_appointment_records():
-    """Diagnostic: list recent appointment_reminders and calendar_emails from DB."""
-    from sqlalchemy import text
-    from db.database import _get_session_factory as _sf
-
-    records = []
-    try:
-        async with _sf()() as session:
-            result = await session.execute(text("""
-                SELECT id, lead_id, contact_id, appointment_datetime,
-                       gcal_event_id, status,
-                       sms_id_confirmation, sms_id_24hr, sms_id_1hr
-                FROM appointment_reminders
-                ORDER BY id DESC
-                LIMIT 15
-            """))
-            rows = result.fetchall()
-            for r in rows:
-                records.append({
-                    "id": r[0], "lead_id": r[1], "contact_id": r[2],
-                    "appointment_datetime": str(r[3]),
-                    "gcal_event_id": r[4], "status": r[5],
-                    "sms_confirmation": r[6], "sms_24hr": r[7], "sms_1hr": r[8],
-                })
-    except Exception as e:
-        return {"error": str(e)}
-
-    cal_emails = []
-    try:
-        async with _sf()() as session:
-            result = await session.execute(text("""
-                SELECT id, lead_id, contact_id, dummy_email, gcal_event_id
-                FROM appointment_calendar_emails
-                ORDER BY id DESC
-                LIMIT 15
-            """))
-            rows = result.fetchall()
-            for r in rows:
-                cal_emails.append({
-                    "id": r[0], "lead_id": r[1], "contact_id": r[2],
-                    "dummy_email": r[3], "gcal_event_id": r[4],
-                })
-    except Exception as e:
-        cal_emails = [{"error": str(e)}]
-
-    return {"appointment_reminders": records, "calendar_emails": cal_emails}
 
 
 # Serve React frontend (built files) — must be LAST so API routes take priority
