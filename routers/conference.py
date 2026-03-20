@@ -279,7 +279,6 @@ async def twiml_conference(request: Request):
     Twilio calls this URL when a participant answers.
     Returns TwiML XML that joins them to the named conference.
     """
-    form = await request.form()
     conference_name = request.query_params.get("conference_name", "fc-bridge-default")
     conf_id = request.query_params.get("conf_id", "")
 
@@ -311,7 +310,10 @@ async def twiml_status(
     No auth — Twilio sends POST form data.
     Events: participant-join, participant-leave, conference-start, conference-end
     """
-    form = await request.form()
+    try:
+        form = await request.form()
+    except Exception:
+        form = {}
     conf_id = request.query_params.get("conf_id", "")
     event = form.get("StatusCallbackEvent", "")
     conference_sid = form.get("ConferenceSid", "")
