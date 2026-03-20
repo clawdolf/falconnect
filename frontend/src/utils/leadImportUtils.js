@@ -357,10 +357,12 @@ const DATE_FIELDS = ['dob', 'mail_date', 'lpd', 'lead_received', 'spouse_dob']
 
 /**
  * Determine Cheryl vendor tier from lead_received date.
- * Cheryl Partner Pricing:
+ * Cheryl Partner Pricing (SCL IMG):
  *   T1: 2025-06-01 – 2025-11-30
  *   T2: 2024-03-01 – 2025-05-31
  *   T3: 2021-03-01 – 2024-02-29
+ *   T4: 2019-03-01 – 2021-02-28
+ *   T5: 2016-03-01 – 2019-02-28
  *
  * Sample verifications from SCL_IMG file:
  *   John Hilton:       2025-02-20 → T2
@@ -376,6 +378,8 @@ function getCherylTier(dateStr) {
   if (ymd >= 20250601 && ymd <= 20251130) return 'T1'
   if (ymd >= 20240301 && ymd <= 20250531) return 'T2'
   if (ymd >= 20210301 && ymd <= 20240229) return 'T3'
+  if (ymd >= 20190301 && ymd <= 20210228) return 'T4'
+  if (ymd >= 20160301 && ymd <= 20190228) return 'T5'
   return null
 }
 
