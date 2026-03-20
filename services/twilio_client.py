@@ -79,20 +79,37 @@ async def update_participant(
     hold: Optional[bool] = None,
     hold_url: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Update a participant (mute/unmute/hold/unhold)."""
-    url = f"{_account_url()}/Conferences/{conference_sid}/Participants/{call_sid}.json"
-    data: Dict[str, str] = {}
-    if muted is not None:
-        data["Muted"] = str(muted).lower()
-    if hold is not None:
-        data["Hold"] = str(hold).lower()
-    if hold_url:
-        data["HoldUrl"] = hold_url
+    """Update a participant (mute/unmute/hold/unhold).
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.post(url, data=data, headers=_auth_header())
-        resp.raise_for_status()
-        return resp.json()
+    Mute: POST to Calls resource (Participants Muted param is deprecated).
+    Hold: POST to Participants resource — HoldUrl required on both hold AND unhold.
+    """
+    result = {}
+
+    # Mute/unmute via Calls resource (Participants Muted is deprecated)
+    if muted is not None:
+        call_url = f"{_account_url()}/Calls/{call_sid}.json"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(call_url, data={"Muted": str(muted).lower()}, headers=_auth_header())
+            if not resp.is_success:
+                logger.error("Twilio mute error %s: %s", resp.status_code, resp.text)
+            resp.raise_for_status()
+            result = resp.json()
+
+    # Hold/unhold via Participants resource — HoldUrl required in both directions
+    if hold is not None:
+        part_url = f"{_account_url()}/Conferences/{conference_sid}/Participants/{call_sid}.json"
+        data: Dict[str, str] = {"Hold": str(hold).lower()}
+        # HoldUrl required whenever Hold param is present (Twilio requirement)
+        data["HoldUrl"] = hold_url or "http://twimlets.com/holdmusic?Bucket=com.twilio.music.classical"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(part_url, data=data, headers=_auth_header())
+            if not resp.is_success:
+                logger.error("Twilio hold error %s: %s", resp.status_code, resp.text)
+            resp.raise_for_status()
+            result = resp.json()
+
+    return result
 
 
 async def delete_participant(conference_sid: str, call_sid: str) -> None:
