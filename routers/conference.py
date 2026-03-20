@@ -87,7 +87,7 @@ async def start_conference(
             session=session,
             lead_phone=req.lead_phone,
             carrier_phone=req.carrier_phone,
-            seb_close_number=req.seb_close_number,
+            seb_close_number="+14809999040",  # Always Seb's Close main line — hardcoded so Close records inbound leg
             lead_id=req.lead_id,
             base_url=base_url,
         )
@@ -295,12 +295,13 @@ async def twiml_conference(request: Request):
     conference_name = request.query_params.get("conference_name", "fc-bridge-default")
     conf_id = request.query_params.get("conf_id", "")
 
-    # Generate TwiML response
+    # Generate TwiML response — statusCallback MUST be absolute URL, Twilio won't follow relative paths
+    public_base = "https://falconconnect.onrender.com"
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Dial>
         <Conference
-            statusCallback="/api/conference/twiml/status?conf_id={conf_id}"
+            statusCallback="{public_base}/api/conference/twiml/status?conf_id={conf_id}"
             statusCallbackEvent="start end join leave mute hold"
             record="record-from-start"
             waitUrl="http://twimlets.com/holdmusic?Bucket=com.twilio.music.classical"
@@ -359,10 +360,12 @@ def _validate_participant(participant: str) -> None:
 
 
 def _get_public_url(request: Request) -> str:
-    """Get the public-facing URL for Twilio callbacks."""
-    # In production, use the known domain
+    """Get the public-facing URL for Twilio callbacks — must always be https://."""
     host = request.headers.get("host", "")
     if "falconnect.org" in host:
         return "https://falconnect.org"
-    # Fallback to request base URL
-    return str(request.base_url).rstrip("/")
+    if "onrender.com" in host:
+        return f"https://{host}"
+    # Fallback — force https regardless of what the proxy reports
+    base = str(request.base_url).rstrip("/")
+    return base.replace("http://", "https://")
