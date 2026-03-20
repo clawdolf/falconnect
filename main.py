@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from db.database import init_db
-from routers import leads, webhooks, calendar, analytics, admin, sync, licenses, agents, campaigns, ad_leads, close_webhooks
+from routers import leads, webhooks, calendar, analytics, admin, sync, licenses, agents, campaigns, ad_leads, close_webhooks, conference
 from routers.sheets import router as sheets_router
 from routers.sms_templates import router as sms_templates_router
 from services.notion_ghl_sync import sync_loop
@@ -425,6 +425,7 @@ app.include_router(close_webhooks.router, prefix="/webhooks", tags=["Close Webho
 app.include_router(sms_templates_router, prefix="/api", tags=["SMS Templates"])
 from routers import research
 app.include_router(research.router, prefix="/api/research", tags=["Research"])
+app.include_router(conference.router, prefix="/api", tags=["Conference Bridge"])
 
 @app.get("/debug/gcal-test")
 async def debug_gcal_test():

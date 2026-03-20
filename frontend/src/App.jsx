@@ -9,6 +9,7 @@ import Analytics from './components/Analytics'
 import Campaigns from './components/Campaigns'
 import Research from './components/Research'
 import SmsTemplates from './components/SmsTemplates'
+import CallManagement from './components/CallManagement'
 
 const PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
 const DEV_BYPASS = import.meta.env.VITE_DEV_BYPASS === 'true'
@@ -23,6 +24,7 @@ const NAV_ITEMS = [
   { key: 'campaigns', label: 'Campaigns' },
   { key: 'research', label: 'Research' },
   { key: 'sms-templates', label: 'SMS Templates' },
+  { key: 'calls', label: 'Call Management' },
 ]
 
 function PageContent({ currentPage, onNavigate }) {
@@ -43,6 +45,8 @@ function PageContent({ currentPage, onNavigate }) {
       return <Research onNavigate={onNavigate} />
     case 'sms-templates':
       return <SmsTemplates />
+    case 'calls':
+      return <CallManagement />
     default:
       return <Dashboard />
   }
