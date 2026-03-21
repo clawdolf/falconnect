@@ -509,15 +509,20 @@ export function buildLeads(rows, headers, columnMap, vendor, tier, leadType, lea
     if (leadType && !lead.lead_type && vendor !== 'Cheryl') lead.lead_type = leadType
     if (leadAge && !lead.lead_age_bucket) lead.lead_age_bucket = leadAge
     if (purchaseDate && !lead.mail_date) lead.mail_date = purchaseDate
-    // Cheryl: auto-assign tier from lead_received date (overrides file-level tier)
-    // Must happen BEFORE lead_source is built so the correct per-row tier is used
+    // Cheryl: auto-assign lead_age_bucket from lead_received date (T1-T5 = age buckets, not tier)
     if (vendor === 'Cheryl' && lead.lead_received) {
       const cherylTier = getCherylTier(lead.lead_received)
-      if (cherylTier) lead.tier = cherylTier
+      if (cherylTier) lead.lead_age_bucket = cherylTier
     }
     if (tier && !lead.tier) lead.tier = tier
-    // Build lead_source AFTER tier is resolved so it reflects the correct per-row tier
-    if (vendor && !lead.lead_source) lead.lead_source = vendor + (lead.tier && lead.tier !== 'N/A' ? ' / ' + lead.tier : '')
+    // Build lead_source — Cheryl is always flat "Cheryl", no tier appended
+    if (vendor && !lead.lead_source) {
+      if (vendor === 'Cheryl') {
+        lead.lead_source = 'Cheryl'
+      } else {
+        lead.lead_source = vendor + (lead.tier && lead.tier !== 'N/A' ? ' / ' + lead.tier : '')
+      }
+    }
     if (purchaseDate && !lead.lpd) lead.lpd = purchaseDate
 
     // 2-digit birth year correction (e.g. "65" → 1965, "24" → 2024)
