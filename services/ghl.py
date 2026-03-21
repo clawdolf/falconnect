@@ -316,7 +316,8 @@ async def upsert_contact(
                     if t.lower() not in tags_to_remove
                     and not t.lower().startswith("imported-")
                 ]
-                extra_tags = ["test-import"] if test_mode else []
+                caller_tags = [t for t in (lead.get("tags") or []) if isinstance(t, str)]
+                extra_tags = (["test-import"] if test_mode else []) + caller_tags
                 merged_tags = list(dict.fromkeys(cleaned_tags + [import_tag] + extra_tags))
 
                 tag_resp = await client.put(
