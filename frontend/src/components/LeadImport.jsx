@@ -202,7 +202,7 @@ function LeadImport() {
     for (let fi = 0; fi < fileQueue.length; fi++) { const fq = fileQueue[fi]; const map = getMapForFile(fi); totalLeads += buildLeads(fq.parsedRows, fq.headers, map, fq.vendor, fq.tier, fq.leadType, fq.leadAge, fq.purchaseDate, adjustAge).leads.length }
     setProgress({ current: 0, total: totalLeads, fileIndex: 0, fileName: fileQueue[0]?.name || '' })
     const authHdrs = await getAuthHeaders()
-    const BS = 50  // smaller batches = smoother progress bar
+    const BS = 10  // small batches = live progress bar updates
     let grandCreated = 0, grandFailed = 0, grandDropped = 0, processedLeads = 0
     const grandErrors = [], grandGhlWarnings = []
     for (let fi = 0; fi < fileQueue.length; fi++) {
@@ -227,7 +227,8 @@ function LeadImport() {
         } catch { fileFailed += batch.length }
         processedLeads += batch.length
         setProgress(prev => ({ ...prev, current: Math.min(processedLeads, totalLeads) }))
-        // no artificial delay between batches — backend handles its own rate limiting
+        // yield to browser so React can flush + paint the progress bar before next batch
+        await new Promise(resolve => requestAnimationFrame(resolve))
       }
       updateFileQueueItem(fi, { status: fileFailed > 0 && fileCreated === 0 ? 'error' : 'done', result: { created: fileCreated, failed: fileFailed, ghlWarnings: fileGhlWarnings, errors: fileErrors, droppedCount, droppedRows } })
       grandCreated += fileCreated; grandFailed += fileFailed; grandErrors.push(...fileErrors); grandGhlWarnings.push(...fileGhlWarnings)
