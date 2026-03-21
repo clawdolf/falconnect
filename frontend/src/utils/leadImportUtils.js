@@ -520,6 +520,12 @@ export function buildLeads(rows, headers, columnMap, vendor, tier, leadType, lea
       delete lead.vendor_lead_id
     }
 
+    // Aria: LEAD TYPE column maps to tier (Gold/Silver/N/A), not lead_type
+    if (vendor === 'Aria Leads' && lead.lead_type) {
+      if (!lead.tier) lead.tier = lead.lead_type
+      delete lead.lead_type
+    }
+
     // Apply batch metadata (only when row doesn't have its own value)
     if (leadType && !lead.lead_type && vendor !== 'Cheryl') lead.lead_type = leadType
     if (leadAge && !lead.lead_age_bucket) lead.lead_age_bucket = leadAge
