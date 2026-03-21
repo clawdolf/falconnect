@@ -331,6 +331,9 @@ async def create_lead(lead_dict: dict) -> dict:
     if lead_age_bucket:
         _set_cf("Lead Age", lead_age_bucket)
 
+    # Cadence Stage — all bulk imports start at blitz-rvm-pending
+    _set_cf("Cadence Stage", "blitz-rvm-pending")
+
     # Age (number: current year - birth_year)
     birth_year = lead_dict.get("birth_year")
     if birth_year:

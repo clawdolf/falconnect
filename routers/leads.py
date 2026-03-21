@@ -170,6 +170,23 @@ async def bulk_import_leads(
                         lead_name, note_exc,
                     )
 
+            # ── STEP 3: GHL upsert — non-fatal, surfaces in error summary ──
+            try:
+                ghl_lead = item.model_dump()
+                ghl_lead["tags"] = ["rvm-pending"]
+                await ghl.upsert_contact(ghl_lead)
+                logger.info("Bulk import — GHL upsert OK: %s", lead_name)
+            except Exception as ghl_exc:
+                ghl_detail = str(ghl_exc)
+                errors.append(
+                    BulkImportError(
+                        index=idx,
+                        error=f"GHL upsert failed (lead created in Close): {ghl_detail}",
+                        lead_name=lead_name,
+                    )
+                )
+                logger.warning("Bulk import — GHL upsert failed for %s (non-fatal): %s", lead_name, ghl_exc)
+
             created += 1
             logger.info(
                 "Bulk import — created: %s (Close:%s)",
