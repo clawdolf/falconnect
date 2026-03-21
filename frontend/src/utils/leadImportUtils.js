@@ -500,16 +500,18 @@ export function buildLeads(rows, headers, columnMap, vendor, tier, leadType, lea
     }
 
     // Apply batch metadata (only when row doesn't have its own value)
-    if (vendor && !lead.lead_source) lead.lead_source = vendor + (tier && tier !== 'N/A' ? ' / ' + tier : '')
     if (leadType && !lead.lead_type) lead.lead_type = leadType
     if (leadAge && !lead.lead_age_bucket) lead.lead_age_bucket = leadAge
     if (purchaseDate && !lead.mail_date) lead.mail_date = purchaseDate
     // Cheryl: auto-assign tier from lead_received date (overrides file-level tier)
+    // Must happen BEFORE lead_source is built so the correct per-row tier is used
     if (vendor === 'Cheryl' && lead.lead_received) {
       const cherylTier = getCherylTier(lead.lead_received)
       if (cherylTier) lead.tier = cherylTier
     }
     if (tier && !lead.tier) lead.tier = tier
+    // Build lead_source AFTER tier is resolved so it reflects the correct per-row tier
+    if (vendor && !lead.lead_source) lead.lead_source = vendor + (lead.tier && lead.tier !== 'N/A' ? ' / ' + lead.tier : '')
     if (purchaseDate && !lead.lpd) lead.lpd = purchaseDate
 
     // 2-digit birth year correction (e.g. "65" → 1965, "24" → 2024)
