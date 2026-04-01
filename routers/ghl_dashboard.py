@@ -1,0 +1,202 @@
+"""GHL Dashboard — read-only intel endpoints."""
+
+import logging
+from datetime import datetime, timezone
+from fastapi import APIRouter, Depends, Query
+from config import Settings, get_settings
+from services.ghl_dashboard_client import GHLDashboardClient
+from services.ghl_dashboard_sync import run_compliance_check
+
+logger = logging.getLogger("ghl_dashboard")
+
+router = APIRouter(prefix="/ghl-dashboard", tags=["GHL Dashboard"])
+
+
+def get_client(settings: Settings = Depends(get_settings)) -> GHLDashboardClient:
+    """Dependency: instantiate GHL client from settings."""
+    return GHLDashboardClient(settings.ghl_private_token, settings.ghl_location_id)
+
+
+@router.get("/summary")
+async def get_summary(client: GHLDashboardClient = Depends(get_client)):
+    """GET /api/ghl-dashboard/summary
+
+    Returns high-level metrics:
+    - contact_count: total contacts
+    - pipeline_count: total pipelines
+    - compliance_score: percentage of compliant contacts (cached)
+    - last_sync: timestamp of last sync
+    """
+    try:
+        contacts = await client.get_contacts(limit=1, page=1)
+        pipelines = await client.get_pipelines()
+
+        # For now, return placeholder compliance (would be cached from DB in production)
+        return {
+            "contact_count": len(contacts),
+            "pipeline_count": len(pipelines),
+            "compliance_score": 0,  # Placeholder
+            "last_sync": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as exc:
+        logger.error(f"get_summary failed: {exc}")
+        return {
+            "contact_count": 0,
+            "pipeline_count": 0,
+            "compliance_score": 0,
+            "last_sync": None,
+            "error": str(exc),
+        }
+
+
+@router.get("/contacts")
+async def get_contacts(
+    limit: int = Query(50, ge=1, le=100),
+    page: int = Query(1, ge=1),
+    client: GHLDashboardClient = Depends(get_client),
+):
+    """GET /api/ghl-dashboard/contacts?limit=50&page=1
+
+    Returns paginated contact list.
+    """
+    try:
+        contacts = await client.get_contacts(limit=limit, page=page)
+        return {
+            "page": page,
+            "limit": limit,
+            "count": len(contacts),
+            "contacts": contacts,
+        }
+    except Exception as exc:
+        logger.error(f"get_contacts failed: {exc}")
+        return {
+            "page": page,
+            "limit": limit,
+            "count": 0,
+            "contacts": [],
+            "error": str(exc),
+        }
+
+
+@router.get("/contacts/compliance")
+async def get_contacts_compliance(client: GHLDashboardClient = Depends(get_client)):
+    """GET /api/ghl-dashboard/contacts/compliance
+
+    Returns compliance report across all contacts.
+    """
+    try:
+        # Fetch all contacts (may need pagination for large lists)
+        contacts = await client.get_contacts(limit=100, page=1)
+        report = run_compliance_check(contacts)
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            **report,
+        }
+    except Exception as exc:
+        logger.error(f"get_contacts_compliance failed: {exc}")
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "total": 0,
+            "compliant": 0,
+            "compliance_rate": 0,
+            "issues": [],
+            "error": str(exc),
+        }
+
+
+@router.get("/pipelines")
+async def get_pipelines(client: GHLDashboardClient = Depends(get_client)):
+    """GET /api/ghl-dashboard/pipelines
+
+    Returns list of all pipelines.
+    """
+    try:
+        pipelines = await client.get_pipelines()
+        return {
+            "count": len(pipelines),
+            "pipelines": pipelines,
+        }
+    except Exception as exc:
+        logger.error(f"get_pipelines failed: {exc}")
+        return {
+            "count": 0,
+            "pipelines": [],
+            "error": str(exc),
+        }
+
+
+@router.get("/pipelines/{pipeline_id}/opportunities")
+async def get_pipeline_opportunities(
+    pipeline_id: str,
+    limit: int = Query(100, ge=1, le=100),
+    client: GHLDashboardClient = Depends(get_client),
+):
+    """GET /api/ghl-dashboard/pipelines/{pipeline_id}/opportunities
+
+    Returns opportunities for a specific pipeline.
+    """
+    try:
+        opportunities = await client.get_opportunities(pipeline_id, limit=limit)
+        return {
+            "pipeline_id": pipeline_id,
+            "count": len(opportunities),
+            "opportunities": opportunities,
+        }
+    except Exception as exc:
+        logger.error(f"get_pipeline_opportunities failed: {exc}")
+        return {
+            "pipeline_id": pipeline_id,
+            "count": 0,
+            "opportunities": [],
+            "error": str(exc),
+        }
+
+
+@router.get("/conversations")
+async def get_conversations(
+    limit: int = Query(100, ge=1, le=100),
+    client: GHLDashboardClient = Depends(get_client),
+):
+    """GET /api/ghl-dashboard/conversations
+
+    Returns recent conversations.
+    """
+    try:
+        conversations = await client.get_conversations(limit=limit)
+        return {
+            "count": len(conversations),
+            "conversations": conversations,
+        }
+    except Exception as exc:
+        logger.error(f"get_conversations failed: {exc}")
+        return {
+            "count": 0,
+            "conversations": [],
+            "error": str(exc),
+        }
+
+
+@router.get("/sync/status")
+async def get_sync_status():
+    """GET /api/ghl-dashboard/sync/status
+
+    Returns status of last sync and record counts.
+    (Placeholder — would read from DB in production)
+    """
+    return {
+        "last_sync": None,
+        "records_processed": 0,
+        "status": "never_run",
+        "error": None,
+    }
+
+
+@router.post("/sync/trigger")
+async def trigger_sync():
+    """POST /api/ghl-dashboard/sync/trigger
+
+    Manually trigger background sync (non-blocking).
+    Returns immediately with {status: "triggered"}.
+    """
+    # TODO: Spawn background task to sync GHL data
+    return {"status": "triggered"}

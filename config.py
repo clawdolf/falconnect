@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     plaid_secret: str = ""
     plaid_env: str = "sandbox"
 
+    # --- GHL Dashboard (read-only intel) ---
+    ghl_private_token: str = ""
+    ghl_location_id: str = ""
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

@@ -459,6 +459,8 @@ app.include_router(close_webhooks.router, prefix="/webhooks", tags=["Close Webho
 app.include_router(sms_templates_router, prefix="/api", tags=["SMS Templates"])
 from routers import research
 app.include_router(research.router, prefix="/api/research", tags=["Research"])
+from routers.ghl_dashboard import router as ghl_dashboard_router
+app.include_router(ghl_dashboard_router, prefix="/api", tags=["GHL Dashboard"])
 app.include_router(conference.router, prefix="/api", tags=["Conference Bridge"])
 app.include_router(ghl_cadence.router, prefix="/api/ghl", tags=["GHL Cadence"])
 app.include_router(cadence_sms.router, prefix="/api/close", tags=["Cadence SMS"])
