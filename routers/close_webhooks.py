@@ -249,6 +249,12 @@ async def _process_appointment(
     """
     settings = get_settings()
 
+    # --- Skip drafts — Close fires 'created' on draft saves before publish ---
+    activity_status = activity_data.get("status", "published")
+    if activity_status == "draft":
+        logger.info("Skipping draft activity for lead %s", lead_id)
+        return {"status": "skipped", "reason": "draft"}
+
     # --- Idempotency guard: skip if we've already processed this activity ---
     activity_id = activity_data.get("id")
     if activity_id:
