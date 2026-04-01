@@ -8,6 +8,7 @@ import SyncManagement from './components/SyncManagement'
 import Analytics from './components/Analytics'
 import Campaigns from './components/Campaigns'
 import Research from './components/Research'
+import GHLDashboard from './pages/GHLDashboard'
 import SmsTemplates from './components/SmsTemplates'
 import CallManagement from './components/CallManagement'
 
@@ -21,6 +22,7 @@ const NAV_ITEMS = [
   { key: 'team', label: 'Team' },
   { key: 'sync', label: 'Sync' },
   { key: 'analytics', label: 'Analytics' },
+  { key: 'ghl-intel', label: 'GHL Intel' },
   { key: 'campaigns', label: 'Campaigns' },
   { key: 'research', label: 'Research' },
   { key: 'sms-templates', label: 'SMS Templates' },
@@ -39,6 +41,8 @@ function PageContent({ currentPage, onNavigate }) {
       return <SyncManagement />
     case 'analytics':
       return <Analytics />
+    case 'ghl-intel':
+      return <GHLDashboard />
     case 'campaigns':
       return <Campaigns onNavigate={onNavigate} />
     case 'research':
