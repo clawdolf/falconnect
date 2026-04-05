@@ -8,7 +8,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "013"
-down_revision = None  # handled by create_all at startup
+down_revision = "012_add_appointment_tables"
 branch_labels = None
 depends_on = None
 
