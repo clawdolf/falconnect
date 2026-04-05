@@ -289,8 +289,7 @@ async def lifespan(app: FastAPI):
         try:
             from services.telegram_alerts import send_telegram_alert as _tg
             import asyncio as _asyncio
-            _asyncio.create_task(_tg(f"STARTUP CRASH
-{_tb[:800]}"))
+            _asyncio.create_task(_tg("STARTUP CRASH\n" + _tb[:800]))
         except Exception:
             pass
         raise
