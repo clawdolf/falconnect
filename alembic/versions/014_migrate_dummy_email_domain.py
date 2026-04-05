@@ -5,13 +5,13 @@ pulling the company logo onto every lead contact record. RFC 2606 reserves .inva
 as a TLD that will never resolve — no logo, no brand association.
 
 Revision ID: 014_migrate_dummy_email_domain
-Revises: 013_add_sms_templates_phone_numbers
+Revises: 013
 Create Date: 2026-03-19
 """
 from alembic import op
 
 revision = "014_migrate_dummy_email_domain"
-down_revision = "013_add_sms_templates_phone_numbers"
+down_revision = "013"
 branch_labels = None
 depends_on = None
 
