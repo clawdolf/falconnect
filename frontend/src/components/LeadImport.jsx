@@ -222,7 +222,14 @@ function LeadImport() {
             const d = await resp.json(); fileCreated += (d.created || 0) + (d.updated || 0); fileFailed += d.failed || 0
             if (d.errors) fileErrors.push(...d.errors); if (d.ghl_warnings) fileGhlWarnings.push(...d.ghl_warnings)
           } else {
-            for (const l of batch) { try { const r = await fetch('/api/leads/capture', { method: 'POST', headers: authHdrs, body: JSON.stringify(l) }); if (r.ok) fileCreated++; else fileFailed++ } catch { fileFailed++ } }
+            // Do NOT fall back to /api/leads/capture — that path writes to Notion only (no Close, breaks cadence).
+            // Treat a non-OK bulk response as a hard failure for the whole batch.
+            const errBody = await resp.json().catch(() => ({}))
+            const errMsg = errBody.detail || `Bulk import failed (HTTP ${resp.status})`
+            for (let k = 0; k < batch.length; k++) {
+              fileErrors.push({ index: i + k, error: errMsg, lead_name: `${batch[k].first_name} ${batch[k].last_name}` })
+            }
+            fileFailed += batch.length
           }
         } catch { fileFailed += batch.length }
         processedLeads += batch.length
