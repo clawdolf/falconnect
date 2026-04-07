@@ -320,7 +320,9 @@ async def schedule_appointment_sms(
         from_number,
     )
 
-    # 1. Confirmation SMS — send immediately
+    # 1. Confirmation SMS — send immediately as outbound
+    # status="outbound" = Close sends it now via their SMS gateway.
+    # status="inbox" would create an inbound record only — lead never receives it.
     confirmation_text = await _sms_confirmation(first_name, day_str, time_str, tz_label, phone)
     results["confirmation"] = await send_sms(
         lead_id=lead_id,
@@ -328,7 +330,7 @@ async def schedule_appointment_sms(
         phone=phone,
         text=confirmation_text,
         from_number=from_number,
-        status="inbox",
+        status="outbound",
     )
 
     # 2. 24hr reminder — scheduled
