@@ -331,7 +331,7 @@ async def schedule_appointment_sms(
         phone=phone,
         text=confirmation_text,
         from_number=from_number,
-        # no status= -- lets Close use its default for outbound sends
+        status="sent",
     )
 
     # 2. 24hr reminder — scheduled

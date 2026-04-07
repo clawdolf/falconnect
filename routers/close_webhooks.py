@@ -400,6 +400,10 @@ async def _process_appointment(
             # Mark old reminder as rebooked
             reminder.status = "rebooked"
 
+        # Capture updated_at values before session closes (avoid DetachedInstanceError)
+        rebooked_timestamps = []
+        for reminder in existing_reminders:
+            rebooked_timestamps.append(reminder.updated_at)
         if existing_reminders:
             await session.commit()
 
@@ -407,8 +411,7 @@ async def _process_appointment(
     if is_update and activity_id and existing_reminders:
         from datetime import timezone as _tz
         now_utc = datetime.now(_tz.utc)
-        for reminder in existing_reminders:
-            upd = reminder.updated_at
+        for upd in rebooked_timestamps:
             if upd is not None:
                 if upd.tzinfo is None:
                     upd = upd.replace(tzinfo=_tz.utc)
