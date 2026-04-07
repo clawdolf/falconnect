@@ -304,7 +304,7 @@ async def schedule_appointment_sms(
     }
 
     # Resolve outbound number via smart routing
-    from_number = await resolve_sms_from_number(lead_id, phone)
+    from_number = await resolve_sms_from_number(lead_id, phone, routing_mode="appointment_reminder")
     if not from_number:
         logger.warning(
             "No outbound number resolved for lead %s / phone %s — skipping all SMS",

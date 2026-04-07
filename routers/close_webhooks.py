@@ -279,6 +279,7 @@ async def _process_appointment(
     # Close sends custom fields as flat "custom.cf_XXX" keys at the data level,
     # NOT as a nested "custom" dict. Extract them directly.
     appointment_dt_str = activity_data.get(f"custom.{CF_APPOINTMENT_DATETIME}")
+    logger.info("RAW appointment_dt_str for lead %s: %s | tz_choice: %s", lead_id, appointment_dt_str, activity_data.get(f"custom.{CF_APPOINTMENT_TIMEZONE}"))
     if not appointment_dt_str:
         logger.warning("No appointment_datetime in activity for lead %s", lead_id)
         return {"status": "skipped", "reason": "no appointment_datetime"}
@@ -290,13 +291,14 @@ async def _process_appointment(
     # Close stores local times without UTC offset. Use the selected timezone so
     # 5pm ET stays 5pm ET, not 5pm AZ.
     try:
-        appointment_dt = datetime.fromisoformat(
-            appointment_dt_str.replace("Z", "+00:00")
-        )
+        # Close sends naive local times (no UTC offset). Parse as-is; if naive,
+        # localize using tz_choice so 5pm ET stays 5pm ET not 5pm UTC/AZ.
+        appointment_dt = datetime.fromisoformat(appointment_dt_str.replace("Z", "+00:00") if "Z" in appointment_dt_str else appointment_dt_str)
         if appointment_dt.tzinfo is None:
             from services.close_sms import _resolve_timezone
             tz_name, _ = _resolve_timezone(tz_choice)
             appointment_dt = appointment_dt.replace(tzinfo=ZoneInfo(tz_name))
+        # else: datetime already has tz info (e.g. came with +00:00), respect it
     except (ValueError, AttributeError) as exc:
         logger.error(
             "Invalid appointment datetime '%s': %s", appointment_dt_str, exc
@@ -387,6 +389,22 @@ async def _process_appointment(
 
         if existing_reminders:
             await session.commit()
+
+    # --- Idempotency: skip if this activity was already rebooked within 60 seconds ---
+    if is_update and activity_id and existing_reminders:
+        from datetime import timezone as _tz
+        now_utc = datetime.now(_tz.utc)
+        for reminder in existing_reminders:
+            upd = reminder.updated_at
+            if upd is not None:
+                if upd.tzinfo is None:
+                    upd = upd.replace(tzinfo=_tz.utc)
+                if (now_utc - upd).total_seconds() < 60:
+                    logger.info(
+                        "Idempotency guard: activity %s rebooked %.1fs ago — skipping duplicate event for lead %s",
+                        activity_id, (now_utc - upd).total_seconds(), lead_id,
+                    )
+                    return {"status": "skipped", "reason": "recent_rebook", "activity_id": activity_id}
 
     # --- Step 1: Send SMS (confirmation + schedule reminders) ---
     sms_results: dict = {"confirmation": None, "reminder_24hr": None, "reminder_1hr": None}

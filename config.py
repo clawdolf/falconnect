@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     close_api_key: str = ""
     close_appointment_activity_type_id: str = "actitype_6awVkZoRuXH1FWUd1F97CH"
     close_sms_from_number: str = ""
+    appointment_reminder_number: str = ""
     close_webhook_secret: str = ""
 
     # --- Google Calendar ---

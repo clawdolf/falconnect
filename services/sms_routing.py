@@ -179,13 +179,15 @@ async def _match_by_area_code(prospect_phone: str) -> Optional[str]:
 async def resolve_sms_from_number(
     lead_id: str,
     prospect_phone: str,
-) -> Optional[str]:
-    """Resolve the best outbound SMS number for a prospect.
-    Priority:
-    1. Most-used local_phone across last 3 outbound calls + last 3 outbound SMS
-    2. Area code / geographic match from phone pool
-    3. None (caller should skip SMS and log a warning)
-    """
+    routing_mode=None,
+):
+    settings = get_settings()
+    if routing_mode == "appointment_reminder":
+        num = settings.appointment_reminder_number or settings.close_sms_from_number
+        if num:
+            logger.info("Appt reminder routing: %s lead %s", num, lead_id)
+            return num
+        logger.warning("APPOINTMENT_REMINDER_NUMBER not set for lead %s", lead_id)
     # 1. Check contact history (calls + SMS, frequency-ranked)
     from_number = await _get_most_used_contact_number(lead_id)
     if from_number:
