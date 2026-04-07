@@ -168,30 +168,41 @@ async def _get_lead_details(lead_id: str) -> Optional[dict]:
 
 
 def _extract_lead_info(lead: dict) -> dict:
-    """Extract first_name, phone, state, contact_id from a Close lead."""
+    """Extract first_name, state, and ALL phone numbers across all contacts.
+
+    Returns all_phones as a list of {contact_id, phone} dicts so cadence
+    SMS fires to every number on the lead. Label quality from mailer data
+    is too inconsistent to filter by type; worst case is an undeliverable.
+    """
     contacts = lead.get("contacts", [])
-    contact = contacts[0] if contacts else {}
-    contact_id = contact.get("id", "")
 
-    # Name
-    full_name = contact.get("name", lead.get("display_name", ""))
-    first_name = full_name.strip().split()[0] if full_name else "there"
+    # Name — from first contact that has one
+    first_name = "there"
+    for c in contacts:
+        full_name = c.get("name", "").strip()
+        if full_name:
+            first_name = full_name.split()[0]
+            break
 
-    # Phone
-    phones = contact.get("phones", [])
-    phone = phones[0].get("phone", "") if phones else ""
+    # All phones across all contacts, deduped by number
+    seen: set[str] = set()
+    all_phones: list[dict] = []
+    for c in contacts:
+        contact_id = c.get("id", "")
+        for p in c.get("phones", []):
+            num = p.get("phone", "").strip()
+            if num and num not in seen:
+                seen.add(num)
+                all_phones.append({"contact_id": contact_id, "phone": num})
 
-    # State — from address
+    # State — from lead address
     addresses = lead.get("addresses", [])
-    state = ""
-    if addresses:
-        state = addresses[0].get("state", "")
+    state = addresses[0].get("state", "") if addresses else ""
 
     return {
-        "contact_id": contact_id,
         "first_name": first_name,
-        "phone": phone,
         "state": state,
+        "all_phones": all_phones,
     }
 
 
@@ -310,13 +321,10 @@ async def send_cadence_sms(
 
     info = _extract_lead_info(lead)
 
-    if not info["phone"]:
-        logger.warning("No phone on lead %s — skipping SMS", lead_id)
-        return {"status": "skipped", "reason": "no phone number", "lead_id": lead_id}
-
-    if not info["contact_id"]:
-        logger.warning("No contact on lead %s — skipping SMS", lead_id)
-        return {"status": "skipped", "reason": "no contact", "lead_id": lead_id}
+    all_phones = info["all_phones"]
+    if not all_phones:
+        logger.warning("No phones on lead %s — skipping SMS", lead_id)
+        return {"status": "skipped", "reason": "no phone numbers", "lead_id": lead_id}
 
     # Load template from DB (fallback to hardcoded)
     template_body = await _load_cadence_template(template_key)
@@ -329,37 +337,48 @@ async def send_cadence_sms(
         state=info["state"],
     )
 
-    # Resolve outbound number via smart routing (history → area code → state fallback)
-    from_number = await resolve_sms_from_number(lead_id, info["phone"], routing_mode="cadence")
-    if not from_number:
-        logger.warning("No from_number resolved for cadence SMS lead=%s", lead_id)
-        return {"status": "error", "reason": "no from_number resolved", "lead_id": lead_id}
-
     # Calculate schedule time if not provided
     if date_scheduled_utc is None:
         date_scheduled_utc = _calc_next_morning_utc(info["state"])
 
-    # Send/schedule SMS
-    sms_id = await _send_close_sms(
-        lead_id=lead_id,
-        contact_id=info["contact_id"],
-        from_number=from_number,
-        to_number=info["phone"],
-        text=sms_text,
-        date_scheduled_utc=date_scheduled_utc,
-    )
+    # Send to every phone number on the lead — labels are unreliable from
+    # mailer data, worst case is an undeliverable on a landline
+    sms_ids: list[str] = []
+    failed: list[str] = []
+    for entry in all_phones:
+        contact_id = entry["contact_id"]
+        to_number = entry["phone"]
 
-    if not sms_id:
+        from_number = await resolve_sms_from_number(lead_id, to_number, routing_mode="cadence")
+        if not from_number:
+            logger.warning("No from_number for lead=%s phone=%s — skipping", lead_id, to_number)
+            failed.append(to_number)
+            continue
+
+        sms_id = await _send_close_sms(
+            lead_id=lead_id,
+            contact_id=contact_id,
+            from_number=from_number,
+            to_number=to_number,
+            text=sms_text,
+            date_scheduled_utc=date_scheduled_utc,
+        )
+
+        if sms_id:
+            sms_ids.append(sms_id)
+        else:
+            failed.append(to_number)
+
+    if not sms_ids:
         await send_telegram_alert(
-            f"<b>Cadence SMS FAILED</b>\n"
+            f"<b>Cadence SMS FAILED (all numbers)</b>\n"
             f"Lead: {lead_id}\n"
             f"Template: {template_key}\n"
-            f"Phone: {info['phone']}\n"
-            f"From: {from_number}",
+            f"Attempted: {[e['phone'] for e in all_phones]}",
         )
-        return {"status": "error", "reason": "SMS send failed", "lead_id": lead_id}
+        return {"status": "error", "reason": "all SMS sends failed", "lead_id": lead_id}
 
-    # Update cadence stage (only if next_stage provided)
+    # Update cadence stage only after at least one SMS succeeded
     stage_updated = False
     if next_stage:
         stage_updated = await _update_cadence_stage(lead_id, next_stage)
@@ -367,10 +386,10 @@ async def send_cadence_sms(
     return {
         "status": "ok",
         "lead_id": lead_id,
-        "sms_id": sms_id,
+        "sms_ids": sms_ids,
+        "failed_numbers": failed,
         "template": template_key,
-        "from_number": from_number,
-        "to_number": info["phone"],
+        "sent_to": [e["phone"] for e in all_phones],
         "scheduled_utc": date_scheduled_utc,
         "next_stage": next_stage,
         "stage_updated": stage_updated,
