@@ -197,6 +197,8 @@ function LeadImport() {
     setInitialAutoMap(autoMapHeaders(fq.headers))
   }
 
+  const animIntervalRef = useRef(null)
+
   const doImport = async () => {
     setStep('importing'); setError(null)
     let totalLeads = 0
@@ -217,6 +219,14 @@ function LeadImport() {
       let fileCreated = 0, fileFailed = 0; const fileGhlWarnings = [], fileErrors = []
       for (let i = 0; i < leads.length; i += BS) {
         const batch = leads.slice(i, i + BS)
+        const batchCeiling = processedLeads + batch.length - 0.5
+        animIntervalRef.current = setInterval(() => {
+          setProgress(prev => {
+            const next = prev.current + 0.3
+            if (next >= batchCeiling) { clearInterval(animIntervalRef.current); animIntervalRef.current = null; return { ...prev, current: batchCeiling } }
+            return { ...prev, current: next }
+          })
+        }, 80)
         try {
           const resp = await fetch('/api/leads/bulk', { method: 'POST', headers: authHdrs, body: JSON.stringify({ leads: batch, dry_run: dryRun, test_mode: testMode, enable_rvm: enableRvm }) })
           if (resp.ok) {
@@ -233,6 +243,7 @@ function LeadImport() {
             fileFailed += batch.length
           }
         } catch { fileFailed += batch.length }
+        if (animIntervalRef.current) { clearInterval(animIntervalRef.current); animIntervalRef.current = null }
         processedLeads += batch.length
         flushSync(() => {
           setProgress(prev => ({ ...prev, current: Math.min(processedLeads, totalLeads) }))
@@ -573,7 +584,7 @@ function LeadImport() {
               <div className="progress-bar" style={{ width: (progress.total > 0 ? (progress.current / progress.total * 100) : 0) + '%', transition: 'width 0.25s ease' }} />
             </div>
             <p className="progress-label">
-              {progress.current} / {progress.total} leads
+              {Math.floor(progress.current)} / {progress.total} leads
               {progress.total > 0 && <span style={{ marginLeft: '0.75rem', color: 'var(--accent)', fontWeight: 700 }}>{Math.round(progress.current / progress.total * 100)}%</span>}
             </p>
             {fileQueue.filter(f => f.status === 'done').length > 0 && (
