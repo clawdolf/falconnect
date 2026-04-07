@@ -507,12 +507,14 @@ async def _process_appointment(
         try:
             await session.commit()
         except Exception as db_exc:
-            # DB write failed — delete the GCal event we just created so it
-            # doesn't orphan (no DB record = can never be cleaned up later).
+            # DB write failed — roll back all external side effects.
+            # GCal event + scheduled SMS were already created; without a DB record
+            # they can never be found or cleaned up on future deletes/rebookings.
             logger.error(
                 "DB commit failed for appointment (lead %s, activity %s): %s — "
-                "rolling back GCal event %s",
+                "rolling back GCal event %s and %d SMS",
                 lead_id, activity_id, db_exc, gcal_event_id,
+                sum(1 for v in sms_results.values() if v),
             )
             if gcal_event_id:
                 try:
@@ -520,6 +522,13 @@ async def _process_appointment(
                     logger.info("GCal rollback: deleted orphaned event %s", gcal_event_id)
                 except Exception as gcal_del_exc:
                     logger.error("GCal rollback failed for %s: %s", gcal_event_id, gcal_del_exc)
+            for sms_id in [v for v in sms_results.values() if v]:
+                try:
+                    from services.close_sms import cancel_scheduled_sms
+                    await cancel_scheduled_sms(sms_id)
+                    logger.info("SMS rollback: cancelled orphaned SMS %s", sms_id)
+                except Exception as sms_del_exc:
+                    logger.error("SMS rollback failed for %s: %s", sms_id, sms_del_exc)
             raise
 
     logger.info(
