@@ -167,6 +167,49 @@ async def _seed_sms_templates() -> None:
         logger.warning("SMS template seed failed (non-fatal): %s", exc)
 
 
+
+
+async def _seed_cadence_sms_templates() -> None:
+    """Seed cadence SMS templates (r1_done/r2_done/r3_done) if missing. Idempotent."""
+    from sqlalchemy import text
+    CADENCE_DEFAULTS = {
+        "r1_done": (
+            "Hey {first_name}, tried reaching you yesterday "
+            "— easier to connect by text? Just takes a couple "
+            "minutes to see what coverage looks like for you."
+        ),
+        "r2_done": (
+            "Most homeowners in {state} don't realize their mortgage "
+            "has zero protection if something happens. Took 2 min "
+            "to fix that for a family last week."
+        ),
+        "r3_done": (
+            "Hey {first_name}, still happy to walk you through what "
+            "mortgage protection would look like for your home. "
+            "Quick call, no pressure. -Seb"
+        ),
+    }
+    try:
+        from db.database import _get_session_factory as _sf
+        async with _sf()() as session:
+            for key, body in CADENCE_DEFAULTS.items():
+                result = await session.execute(
+                    text("SELECT COUNT(*) FROM sms_templates WHERE template_key = :key"),
+                    {"key": key},
+                )
+                if result.scalar() == 0:
+                    await session.execute(
+                        text(
+                            "INSERT INTO sms_templates (template_key, body, created_at, updated_at) "
+                            "VALUES (:key, :body, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                        ),
+                        {"key": key, "body": body},
+                    )
+                    logger.info("Seeded cadence SMS template: %s", key)
+            await session.commit()
+    except Exception as exc:
+        logger.warning("Cadence SMS template seed failed (non-fatal): %s", exc)
+
 async def _seed_phone_numbers() -> None:
     """Seed phone number pool if table is empty. Idempotent."""
     import json
@@ -351,6 +394,7 @@ async def lifespan(app: FastAPI):
 
     # Seed SMS templates and phone number pool
     await _seed_sms_templates()
+    await _seed_cadence_sms_templates()
     await _seed_phone_numbers()
 
     # Validate GCal connection at startup — log ERROR + alert if broken, but don't crash
