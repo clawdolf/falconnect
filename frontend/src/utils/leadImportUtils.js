@@ -28,7 +28,7 @@ export const NEEDS_LEAD_AGE = {
   'Anne Proven Leads': true,
   'Aria Leads': true,
   'MilMo': true,
-  'Cheryl': true,
+  'Cheryl': false,
 }
 
 export const VENDOR_AGE_BUCKETS = {
@@ -36,7 +36,7 @@ export const VENDOR_AGE_BUCKETS = {
   'Anne Proven Leads':  ['3M', '6M', '7-12M', '13-24M', '25-36M', '37-48M', '49-60M', '60+M'],
   'Aria Leads':    ['1+ Mo', '2+ Mo', '3+ Mo', '9+ Mo', '2+ Yr'],
   'MilMo':         ['7-12M', '13-24M', '25-36M', '37-48M', '49-60M', '60+M'],
-  'Cheryl':        ['T1', 'T2', 'T3', 'T4', 'T5'],
+  'Cheryl':        [],
 }
 
 
