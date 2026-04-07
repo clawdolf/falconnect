@@ -94,7 +94,7 @@ def _format_appointment_time(
     local_dt = appointment_dt.astimezone(tz)
 
     # Time: "2:00 PM ET"
-    time_str = f"{local_dt.strftime('%-I:%M %p')} {tz_label}"
+    time_str = local_dt.strftime("%-I:%M %p")
 
     # Day: "Tuesday, March 18th"
     day = local_dt.day

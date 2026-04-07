@@ -281,25 +281,25 @@ async def _process_appointment(
         logger.warning("No appointment_datetime in activity for lead %s", lead_id)
         return {"status": "skipped", "reason": "no appointment_datetime"}
 
-    # Parse the datetime — if no timezone info, treat as America/Phoenix (MST)
-    # Close sends local times without UTC offset; forcing UTC was placing events
-    # at the wrong hour in Seb's calendar.
+    # Get timezone choice early — needed to correctly interpret the naive datetime
+    tz_choice = activity_data.get(f"custom.{CF_APPOINTMENT_TIMEZONE}")
+
+    # Parse the datetime — use tz_choice to interpret naive datetimes correctly.
+    # Close stores local times without UTC offset. Use the selected timezone so
+    # 5pm ET stays 5pm ET, not 5pm AZ.
     try:
         appointment_dt = datetime.fromisoformat(
             appointment_dt_str.replace("Z", "+00:00")
         )
         if appointment_dt.tzinfo is None:
-            appointment_dt = appointment_dt.replace(
-                tzinfo=ZoneInfo("America/Phoenix")
-            )
+            from services.close_sms import _resolve_timezone
+            tz_name, _ = _resolve_timezone(tz_choice)
+            appointment_dt = appointment_dt.replace(tzinfo=ZoneInfo(tz_name))
     except (ValueError, AttributeError) as exc:
         logger.error(
             "Invalid appointment datetime '%s': %s", appointment_dt_str, exc
         )
         return {"status": "error", "reason": f"invalid datetime: {appointment_dt_str}"}
-
-    # Get timezone choice, notes, and appointment length from custom fields
-    tz_choice = activity_data.get(f"custom.{CF_APPOINTMENT_TIMEZONE}")
     notes = activity_data.get(f"custom.{CF_APPOINTMENT_NOTES}", "")
     length_choice = activity_data.get(f"custom.{CF_APPOINTMENT_LENGTH}")
     duration_minutes = DURATION_MAP.get(length_choice, DEFAULT_DURATION_MINUTES)
@@ -346,13 +346,24 @@ async def _process_appointment(
         )
 
     # --- Check for rebooking — cancel old reminders/events if they exist ---
+    # Use activity_id when available (reschedule of same activity) to avoid
+    # duplicate GCal entries when Close fires multiple webhook events for one booking.
+    # Fall back to lead_id search for new bookings that replace old activities.
     async with _get_session_factory()() as session:
-        result = await session.execute(
-            select(AppointmentReminder).where(
-                AppointmentReminder.lead_id == lead_id,
-                AppointmentReminder.status == "active",
+        if is_update and activity_id:
+            result = await session.execute(
+                select(AppointmentReminder).where(
+                    AppointmentReminder.activity_id == activity_id,
+                    AppointmentReminder.status == "active",
+                )
             )
-        )
+        else:
+            result = await session.execute(
+                select(AppointmentReminder).where(
+                    AppointmentReminder.lead_id == lead_id,
+                    AppointmentReminder.status == "active",
+                )
+            )
         existing_reminders = result.scalars().all()
 
         for reminder in existing_reminders:
