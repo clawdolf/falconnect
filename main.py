@@ -33,6 +33,7 @@ async def _seed_licenses_if_empty() -> None:
         ("Kansas",         "KS", None,      "https://sbs.naic.org/solar-external-lookup/lookup/licensee/summary/21408357?jurisdiction=KS&entityType=IND&licenseType=PRO", False),
         ("Maine",          "ME", None,      "https://www.pfr.maine.gov/ALMSOnline/ALMSQuery/ShowDetail.aspx?DetailToken=704F3C701A9F11E086BB0F98AA047C448C67C5003D086308CD98C8424EC1769E", False),
         ("North Carolina", "NC", None,      "https://sbs.naic.org/solar-external-lookup/lookup/licensee/summary/21408357?jurisdiction=NC&entityType=IND&licenseType=PRO", False),
+        ("Ohio",          "OH", "1733239", "https://gateway.insurance.ohio.gov/UI/ODI.Agent.Public.UI/AgentLocator.mvc/DisplayIndividualDetail/QpHt3y5h2RfCYJRLJrrJLw!3d!3d", False),
         ("Oregon",         "OR", None,      "https://sbs.naic.org/solar-external-lookup/lookup/licensee/summary/21408357?jurisdiction=OR&entityType=IND&licenseType=PRO", False),
         ("Pennsylvania",   "PA", "1152553", "https://www.sircon.com/ComplianceExpress/Inquiry/consumerInquiry.do?nonSscrb=Y", True),
         ("Texas",          "TX", "3317972", "https://www.sircon.com/ComplianceExpress/Inquiry/consumerInquiry.do?nonSscrb=Y", True),
@@ -42,7 +43,7 @@ async def _seed_licenses_if_empty() -> None:
         async with _sf()() as session:
             result = await session.execute(text("SELECT COUNT(*) FROM licenses WHERE user_id = :uid"), {"uid": SEB_USER_ID})
             if result.scalar() == 0:
-                logger.info("Seeding 8 licenses for Seb (table empty)")
+                logger.info("Seeding 9 licenses for Seb (table empty)")
                 for state, abbr, lic_num, verify_url, manual in LICENSES:
                     await session.execute(
                         text(
@@ -53,11 +54,43 @@ async def _seed_licenses_if_empty() -> None:
                         {"uid": SEB_USER_ID, "state": state, "abbr": abbr, "lic_num": lic_num, "verify_url": verify_url, "manual": manual},
                     )
                 await session.commit()
-                logger.info("License seed complete — 8 records inserted")
+                logger.info("License seed complete — 9 records inserted")
             else:
                 logger.info("Licenses already seeded — skipping")
     except Exception as exc:
         logger.warning("License seed failed (non-fatal): %s", exc)
+
+
+
+async def _fix_ohio_verify_url() -> None:
+    """Fix Ohio license verify_url — Ohio uses its own portal, not NAIC SOLAR.
+    Runs on every startup to patch any existing DB records that have the wrong SOLAR URL.
+    """
+    from sqlalchemy import text
+    try:
+        from db.database import _get_session_factory as _sf
+        canonical_uid = os.environ.get("CLERK_ADMIN_USER_ID", "user_3ASrwDOrSTaDxCus6f1B5lnDsgz")
+        ohio_direct_url = (
+            "https://gateway.insurance.ohio.gov/UI/ODI.Agent.Public.UI/"
+            "AgentLocator.mvc/DisplayIndividualDetail/QpHt3y5h2RfCYJRLJrrJLw!3d!3d"
+        )
+        async with _sf()() as session:
+            result = await session.execute(
+                text(
+                    "UPDATE licenses SET verify_url = :url, needs_manual_verification = false "
+                    "WHERE user_id = :uid AND state_abbreviation = 'OH' "
+                    "AND (verify_url LIKE '%naic.org%' OR verify_url = '')"
+                ),
+                {"uid": canonical_uid, "url": ohio_direct_url},
+            )
+            if result.rowcount:
+                await session.commit()
+                logger.info(
+                    "Fixed Ohio license verify_url: %d row(s) updated to Ohio direct link",
+                    result.rowcount,
+                )
+    except Exception as exc:
+        logger.warning("Ohio license fix failed (non-fatal): %s", exc)
 
 
 async def _dedup_licenses() -> None:
@@ -313,6 +346,7 @@ async def lifespan(app: FastAPI):
 
     # Seed Seb's licenses if empty (idempotent), then dedup any duplicates
     await _seed_licenses_if_empty()
+    await _fix_ohio_verify_url()
     await _dedup_licenses()
 
     # Seed SMS templates and phone number pool
@@ -417,6 +451,7 @@ async def seed_licenses_now():
         ("Kansas",         "KS", None,      "https://sbs.naic.org/solar-external-lookup/lookup/licensee/summary/21408357?jurisdiction=KS&entityType=IND&licenseType=PRO", False),
         ("Maine",          "ME", None,      "https://www.pfr.maine.gov/ALMSOnline/ALMSQuery/ShowDetail.aspx?DetailToken=704F3C701A9F11E086BB0F98AA047C448C67C5003D086308CD98C8424EC1769E", False),
         ("North Carolina", "NC", None,      "https://sbs.naic.org/solar-external-lookup/lookup/licensee/summary/21408357?jurisdiction=NC&entityType=IND&licenseType=PRO", False),
+        ("Ohio",          "OH", "1733239", "https://gateway.insurance.ohio.gov/UI/ODI.Agent.Public.UI/AgentLocator.mvc/DisplayIndividualDetail/QpHt3y5h2RfCYJRLJrrJLw!3d!3d", False),
         ("Oregon",         "OR", None,      "https://sbs.naic.org/solar-external-lookup/lookup/licensee/summary/21408357?jurisdiction=OR&entityType=IND&licenseType=PRO", False),
         ("Pennsylvania",   "PA", "1152553", "https://www.sircon.com/ComplianceExpress/Inquiry/consumerInquiry.do?nonSscrb=Y", True),
         ("Texas",          "TX", "3317972", "https://www.sircon.com/ComplianceExpress/Inquiry/consumerInquiry.do?nonSscrb=Y", True),
