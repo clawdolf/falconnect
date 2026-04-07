@@ -34,7 +34,6 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 import httpx
-import pytz
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 
@@ -52,7 +51,6 @@ from services.google_calendar import (
     GCalError,
     create_appointment_event,
     delete_event,
-    update_appointment_event,
 )
 from services.telegram_alerts import send_telegram_alert
 
@@ -658,6 +656,85 @@ async def _handle_appointment_deleted(lead_id: str) -> dict:
 # Webhook endpoint
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Cadence lead.updated handler
+# ---------------------------------------------------------------------------
+
+# Cadence stage field ID
+CF_CADENCE_STAGE = "cf_vuP2rYRL0LA3OK0nCyZm9b19ki8ddokdTAapVnJ2Elb"
+
+# Map cadence_stage value → (template_key, update_stage_to)
+CADENCE_TRIGGER_MAP = {
+    "3. r1-done": ("r1_done", ""),        # leave stage as-is
+    "5. r2-done": ("r2_done", ""),        # leave stage as-is
+    "7. r3-done": ("r3_done", "nurture"), # advance to nurture after SMS
+}
+
+
+async def _handle_lead_updated(event: dict) -> dict:
+    """Handle lead.updated events for cadence_stage changes.
+
+    When cadence_stage changes to r1-done/r2-done/r3-done, schedule
+    the appropriate cadence SMS for next morning 8:30am in lead's local tz.
+    For r3-done, also sets stage to 'nurture' after SMS is scheduled.
+    """
+    lead_id = event.get("lead_id", "") or event.get("data", {}).get("lead_id", "")
+    changed_fields = event.get("changed_fields", [])
+    event_data = event.get("data", {})
+
+    cadence_field_key = f"custom.{CF_CADENCE_STAGE}"
+
+    if cadence_field_key not in changed_fields:
+        logger.debug(
+            "lead.updated for lead %s — cadence_stage field not in changed_fields, skipping",
+            lead_id,
+        )
+        return {"status": "skipped", "reason": "cadence_stage not changed"}
+
+    # Get new value — Close sends custom fields as "custom.cf_xxx" in the data dict
+    new_stage = event_data.get(cadence_field_key, "")
+    if not new_stage:
+        logger.debug("lead.updated: no new cadence_stage value for lead %s", lead_id)
+        return {"status": "skipped", "reason": "no new cadence_stage value"}
+
+    trigger = CADENCE_TRIGGER_MAP.get(new_stage)
+    if not trigger:
+        logger.debug(
+            "lead.updated: cadence_stage '%s' is not a trigger value for lead %s",
+            new_stage, lead_id,
+        )
+        return {"status": "skipped", "reason": "cadence_stage '{new_stage}' not a trigger"}
+
+    template_key, next_stage = trigger
+
+    logger.info(
+        "Cadence trigger: lead=%s stage='%s' → template=%s next_stage='%s'",
+        lead_id, new_stage, template_key, next_stage or "(none)",
+    )
+
+    # Import here to avoid circular imports
+    from routers.cadence_sms import send_cadence_sms
+
+    result = await send_cadence_sms(
+        lead_id=lead_id,
+        template_key=template_key,
+        next_stage=next_stage,
+        date_scheduled_utc=None,  # auto-calc next morning 8:30am
+    )
+
+    if result.get("status") == "ok":
+        logger.info(
+            "Cadence SMS scheduled: lead=%s template=%s sms_id=%s scheduled_utc=%s",
+            lead_id, template_key, result.get("sms_id"), result.get("scheduled_utc"),
+        )
+    else:
+        logger.error(
+            "Cadence SMS failed: lead=%s template=%s reason=%s",
+            lead_id, template_key, result.get("reason"),
+        )
+
+    return result
+
 @router.post("/close")
 async def close_webhook(request: Request):
     """Receive and process Close.com webhook events.
@@ -739,6 +816,10 @@ async def close_webhook(request: Request):
         object_type,
         lead_id,
     )
+
+    # Route lead.updated events to cadence handler
+    if object_type == "lead" and action == "updated":
+        return await _handle_lead_updated(event)
 
     # Only process custom activity events
     if object_type != "activity.custom_activity":
