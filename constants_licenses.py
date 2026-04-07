@@ -32,7 +32,7 @@ SOLAR_STATES = {
     "AL", "AK", "AZ", "AR", "CO", "CT", "DE", "DC", "GA",
     "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "MD",
     "MA", "MI", "MN", "MS", "MO", "NE", "NV", "NH", "NJ",
-    "NM", "NC", "ND", "OH", "OK", "OR", "RI", "SC", "SD",
+    "NM", "NC", "ND", "OK", "OR", "RI", "SC", "SD",
     "TN", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
     # NOTE: MT uses external-lookup-web.prod.naic.org with state license number (not NPN).
     # Handled as a special case in get_verify_url() above SOLAR_STATES check.
@@ -76,6 +76,10 @@ STATE_PORTALS = {
     # Pennsylvania: Sircon lookup (requires manual entry of license number)
     "PA": "https://www.sircon.com/ComplianceExpress/Inquiry/consumerInquiry.do?nonSscrb=Y",
     
+    # Ohio: ODI portal — uses opaque token-based direct links, not NAIC SOLAR
+    # Token is specific to each agent's licensingEntityId (not NPN). Store direct URL.
+    "OH": "https://gateway.insurance.ohio.gov/UI/ODI.Agent.Public.UI/AgentLocator.mvc",
+    
     # Maine: Bureau of Insurance ALMS system (direct link with token if available)
     "ME": "https://www.pfr.maine.gov/ALMSOnline/ALMSQuery/SearchIndividual.aspx",
     
@@ -86,7 +90,7 @@ STATE_PORTALS = {
 # States where the user needs to manually enter a license number on the portal
 # FL is excluded here — it has a direct link once fl_internal_id is resolved.
 # If fl_internal_id is missing, FL falls back to the search portal (functionally manual).
-MANUAL_ENTRY_STATES = {"TX", "PA", "CA", "NY", "ME"}
+MANUAL_ENTRY_STATES = {"TX", "PA", "CA", "NY", "ME", "OH"}
 
 # States using FL-style independent portals that require a one-time automated lookup
 # to resolve a direct permalink (stored as fl_internal_id or equivalent in the DB).
