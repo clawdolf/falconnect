@@ -172,7 +172,7 @@ async def send_sms(
     phone: str,
     text: str,
     from_number: Optional[str] = None,
-    status: str = "inbox",
+    status: Optional[str] = None,   # None = omit from payload (for immediate send)
     date_scheduled: Optional[str] = None,
 ) -> Optional[str]:
     """Send or schedule an SMS via Close.com API.
@@ -204,9 +204,10 @@ async def send_sms(
         "local_phone": from_number,
         "remote_phone": phone,
         "text": text,
-        "status": status,
         "direction": "outbound",
     }
+    if status is not None:
+        payload["status"] = status
 
     if status == "scheduled" and date_scheduled:
         payload["date_scheduled"] = date_scheduled
@@ -330,7 +331,7 @@ async def schedule_appointment_sms(
         phone=phone,
         text=confirmation_text,
         from_number=from_number,
-        status="outbound",
+        # no status= -- lets Close use its default for outbound sends
     )
 
     # 2. 24hr reminder — scheduled

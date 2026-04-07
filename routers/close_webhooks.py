@@ -304,6 +304,19 @@ async def _process_appointment(
             "Invalid appointment datetime '%s': %s", appointment_dt_str, exc
         )
         return {"status": "error", "reason": f"invalid datetime: {appointment_dt_str}"}
+
+    # Close converts entered time to UTC using account timezone (AZ / UTC-7).
+    # tz_choice is the user INTENDED timezone (e.g. ET for an Eastern client).
+    # Re-localize: convert UTC -> AZ to recover the entered time, then attach tz_choice.
+    if appointment_dt.tzinfo is not None and tz_choice and tz_choice.strip():
+        from services.close_sms import _resolve_timezone
+        import pytz as _pytz
+        _az_tz = _pytz.timezone("America/Phoenix")
+        _az_local = appointment_dt.astimezone(_az_tz)
+        _naive_entered = _az_local.replace(tzinfo=None)  # the time Seb typed, e.g. 17:00
+        _tz_name, _ = _resolve_timezone(tz_choice)
+        appointment_dt = _naive_entered.replace(tzinfo=ZoneInfo(_tz_name))
+
     notes = activity_data.get(f"custom.{CF_APPOINTMENT_NOTES}", "")
     length_choice = activity_data.get(f"custom.{CF_APPOINTMENT_LENGTH}")
     duration_minutes = DURATION_MAP.get(length_choice, DEFAULT_DURATION_MINUTES)
