@@ -221,11 +221,15 @@ def _extract_first_name(contact_name: str) -> str:
 
 
 def _extract_phone(contact: dict) -> Optional[str]:
-    """Extract the first phone number from a Close contact."""
+    """Extract phone from a Close contact, preferring mobile type.
+
+    Falls back to first phone if none is labeled mobile.
+    """
     phones = contact.get("phones", [])
-    if phones:
-        return phones[0].get("phone")
-    return None
+    if not phones:
+        return None
+    mobile = next((p for p in phones if p.get("type") == "mobile"), None)
+    return (mobile or phones[0]).get("phone")
 
 
 # ---------------------------------------------------------------------------
