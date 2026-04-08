@@ -312,14 +312,12 @@ async def create_lead(lead_dict: dict, enable_rvm: bool = True) -> dict:
     _set_cf("Tier", lead_dict.get("tier"))
     _set_cf("Vendor Lead ID", lead_dict.get("vendor_lead_id"))
 
-    # Loan Amount (number) — strip non-numeric chars, convert to float
+    # Loan Amount (text) — strip non-numeric chars, send as string
     loan_raw = lead_dict.get("loan_amount")
     if loan_raw:
-        try:
-            loan_num = float(re.sub(r"[^\d.]", "", str(loan_raw)))
-            _set_cf("Loan Amount", loan_num)
-        except (ValueError, TypeError):
-            _set_cf("Loan Amount", str(loan_raw))
+        loan_clean = re.sub(r"[^\d.]", "", str(loan_raw))
+        if loan_clean:
+            _set_cf("Loan Amount", loan_clean)
 
     # Lead Purchase Date (date) — from lpd only
     lpd_raw = lead_dict.get("lpd")
@@ -351,13 +349,13 @@ async def create_lead(lead_dict: dict, enable_rvm: bool = True) -> dict:
     cadence_stage = "1. r0-pending" if enable_rvm else "2. r1-calling"
     _set_cf("Cadence Stage", cadence_stage)
 
-    # Age (number: current year - birth_year)
+    # Age (text: current year - birth_year)
     birth_year = lead_dict.get("birth_year")
     if birth_year:
         try:
             age = datetime.now().year - int(birth_year)
             if 0 < age < 150:
-                _set_cf("Age", age)
+                _set_cf("Age", str(age))
         except (ValueError, TypeError):
             pass
 
