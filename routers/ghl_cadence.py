@@ -187,30 +187,57 @@ async def _update_cadence_stage(lead_id: str, stage: str) -> bool:
 def _extract_ghl_contact_data(payload: dict) -> dict:
     """Extract contact info from a GHL webhook payload.
 
-    GHL tag-change webhooks send the full contact object.
-    Handles variations in payload structure.
-    """
-    # GHL can nest contact data at top level or under "contact"
-    contact = payload.get("contact", payload)
+    GHL workflow webhooks (tag-change, automation triggers) send data like:
+        {
+          "type": "ContactTagUpdate",
+          "customData": {"contactID": "abc123", "phone": "(480) 555-1234"},
+          "workflow": {...},
+          "triggerData": {}
+        }
 
+    Direct contact webhooks nest data under payload["contact"]["id"].
+
+    Priority order for contact ID:
+      1. customData.contactID  — GHL workflow/automation webhook (confirmed from logs)
+      2. customData.contactId  — alternate casing
+      3. payload.contactId     — direct contact webhook
+      4. payload.contact_id    — snake_case variant
+      5. payload.contact.id    — nested contact object
+      NOTE: payload.id is the workflow EVENT id, never use it as contact id.
+    """
+    custom_data = payload.get("customData") or {}
+
+    # Contact ID — priority order matters, do NOT put payload["id"] here
+    contact_id = (
+        custom_data.get("contactID", "")
+        or custom_data.get("contactId", "")
+        or payload.get("contactId", "")
+        or payload.get("contact_id", "")
+        or (payload.get("contact") or {}).get("id", "")
+    )
+
+    # Contact fields — check nested contact object, then top-level
+    contact = payload.get("contact") or {}
     first_name = (
         contact.get("firstName", "")
         or contact.get("first_name", "")
-        or contact.get("name", "").split()[0] if contact.get("name") else ""
+        or payload.get("firstName", "")
+        or payload.get("first_name", "")
     )
     last_name = (
         contact.get("lastName", "")
         or contact.get("last_name", "")
-        or (" ".join(contact.get("name", "").split()[1:]) if contact.get("name") else "")
+        or payload.get("lastName", "")
+        or payload.get("last_name", "")
     )
-    phone = normalize_phone(contact.get("phone", ""))
-    email = contact.get("email", "")
-    contact_id = (
-        contact.get("id", "")
-        or contact.get("contactId", "")
-        or payload.get("contactId", "")
-        or payload.get("contact_id", "")
+    # GHL workflow webhooks send phone in customData, not top-level
+    raw_phone = (
+        custom_data.get("phone", "")
+        or contact.get("phone", "")
+        or payload.get("phone", "")
     )
+    phone = normalize_phone(raw_phone)
+    email = contact.get("email", "") or payload.get("email", "")
     full_name = f"{first_name} {last_name}".strip() or "Unknown"
 
     return {
