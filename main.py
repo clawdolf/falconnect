@@ -548,6 +548,19 @@ app.include_router(research.router, prefix="/api/research", tags=["Research"])
 app.include_router(ghl_dashboard_router, prefix="/api", tags=["GHL Dashboard"])
 app.include_router(conference.router, prefix="/api", tags=["Conference Bridge"])
 app.include_router(ghl_cadence.router, prefix="/api/ghl", tags=["GHL Cadence"])
+
+
+# ── TEMP: one-time xref clear — remove after use ──
+from fastapi import Request as _Request
+@app.delete("/admin/clear-xref")
+async def clear_xref(_req: _Request):
+    from db.database import get_session
+    from sqlalchemy import text
+    async with get_session() as session:
+        result = await session.execute(text("DELETE FROM lead_xref"))
+        await session.commit()
+        return {"deleted": result.rowcount}
+# ── END TEMP ──
 app.include_router(cadence_sms.router, prefix="/api/close", tags=["Cadence SMS"])
 app.include_router(close_lead_status.router, prefix="/api/close", tags=["Close Lead Status Kill-Switch"])
 
