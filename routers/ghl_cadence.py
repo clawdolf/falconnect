@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import get_settings
-from db.database import get_session, _get_session_factory as session_maker
+from db.database import get_session
 from db.models import SyncLog, LeadXref
 from services.close import normalize_phone
 from services.telegram_alerts import send_telegram_alert
@@ -301,14 +301,13 @@ async def ghl_rvm_complete(
     existing_lead = None
     if ghl_contact_id:
         try:
-            async with session_maker() as xref_session:
-                xref_result = await xref_session.execute(
-                    select(LeadXref).where(LeadXref.ghl_contact_id == ghl_contact_id)
-                )
-                xref = xref_result.scalar_one_or_none()
-                if xref and xref.close_lead_id:
-                    existing_lead = {"id": xref.close_lead_id}
-                    logger.info("LeadXref hit: GHL %s → Close %s", ghl_contact_id, xref.close_lead_id)
+            xref_result = await session.execute(
+                select(LeadXref).where(LeadXref.ghl_contact_id == ghl_contact_id)
+            )
+            xref = xref_result.scalar_one_or_none()
+            if xref and xref.close_lead_id:
+                existing_lead = {"id": xref.close_lead_id}
+                logger.info("LeadXref hit: GHL %s → Close %s", ghl_contact_id, xref.close_lead_id)
         except Exception as xref_exc:
             logger.warning("LeadXref lookup failed for %s: %s", ghl_contact_id, xref_exc)
 
