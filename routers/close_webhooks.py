@@ -495,7 +495,7 @@ async def _process_appointment(
     gcal_event_id = None
     try:
         gcal_event_id = await create_appointment_event(
-            summary=f"Call with {contact_name or lead_id}",
+            summary=f"{contact_name or lead_id}",
             description=(
                 f"Open in Close: https://app.close.com/leads/{lead_id}/\n"
                 f"Contact: {contact_name}\n"
