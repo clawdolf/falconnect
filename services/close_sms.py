@@ -48,15 +48,15 @@ DEFAULT_TZ_LABEL = "AZ"
 # Default SMS templates — used if DB has no entries yet
 DEFAULT_TEMPLATES: dict[str, str] = {
     "confirmation": (
-        "Hi {{name}}, your appointment with Seb at Falcon Financial is confirmed "
-        "for {{date}} at {{time}} {{timezone}}."
+        "Hi {first_name}, your appointment with Seb at Falcon Financial is confirmed "
+        "for {date} at {time} {timezone}."
     ),
     "reminder_24hr": (
-        "Hey {{name}}, just a reminder — you have an appointment tomorrow "
-        "at {{time}} {{timezone}}. Talk soon."
+        "Hey {first_name}, just a reminder — you have an appointment tomorrow "
+        "at {time} {timezone}. Talk soon."
     ),
     "reminder_1hr": (
-        "Hey {{name}}, your appointment is in 1 hour at {{time}} {{timezone}}. "
+        "Hey {first_name}, your appointment is in 1 hour at {time} {timezone}. "
         "See you soon."
     ),
 }
@@ -133,36 +133,63 @@ async def _load_template(template_key: str) -> str:
 def _render_template(
     template: str,
     *,
-    name: str = "",
+    first_name: str = "",
     date: str = "",
     time: str = "",
     timezone: str = "",
     phone: str = "",
+    address: str = "",
+    state: str = "",
 ) -> str:
-    """Render merge fields in an SMS template."""
-    return (
-        template
-        .replace("{{name}}", name)
-        .replace("{{date}}", date)
-        .replace("{{time}}", time)
-        .replace("{{timezone}}", timezone)
-        .replace("{{phone}}", phone)
+    """Render merge fields in an SMS template using Python .format().
+
+    Falls back to legacy .replace() for old double-brace syntax if format()
+    leaves unresolved braces (e.g. {{name}} -> {name} after format).
+    """
+    values = dict(
+        first_name=first_name,
+        date=date,
+        time=time,
+        timezone=timezone,
+        phone=phone,
+        address=address,
+        state=state,
     )
+    try:
+        result = template.format(**values)
+    except (KeyError, IndexError):
+        result = template
+
+    # Backward compat: if old {{name}} syntax still present, render it
+    if "{{" in result or "}}" in result:
+        result = (
+            result
+            .replace("{{name}}", first_name)
+            .replace("{{first_name}}", first_name)
+            .replace("{{date}}", date)
+            .replace("{{time}}", time)
+            .replace("{{timezone}}", timezone)
+            .replace("{{phone}}", phone)
+            .replace("{{address}}", address)
+            .replace("{{state}}", state)
+        )
+
+    return result
 
 
-async def _sms_confirmation(first_name: str, day_str: str, time_str: str, tz_label: str, phone: str = "") -> str:
+async def _sms_confirmation(first_name: str, day_str: str, time_str: str, tz_label: str, phone: str = "", address: str = "") -> str:
     template = await _load_template("confirmation")
-    return _render_template(template, name=first_name, date=day_str, time=time_str, timezone=tz_label, phone=phone)
+    return _render_template(template, first_name=first_name, date=day_str, time=time_str, timezone=tz_label, phone=phone, address=address)
 
 
-async def _sms_24hr_reminder(first_name: str, time_str: str, tz_label: str, phone: str = "") -> str:
+async def _sms_24hr_reminder(first_name: str, time_str: str, tz_label: str, phone: str = "", address: str = "") -> str:
     template = await _load_template("reminder_24hr")
-    return _render_template(template, name=first_name, time=time_str, timezone=tz_label, phone=phone)
+    return _render_template(template, first_name=first_name, time=time_str, timezone=tz_label, phone=phone, address=address)
 
 
-async def _sms_1hr_reminder(first_name: str, time_str: str, tz_label: str, phone: str = "") -> str:
+async def _sms_1hr_reminder(first_name: str, time_str: str, tz_label: str, phone: str = "", address: str = "") -> str:
     template = await _load_template("reminder_1hr")
-    return _render_template(template, name=first_name, time=time_str, timezone=tz_label, phone=phone)
+    return _render_template(template, first_name=first_name, time=time_str, timezone=tz_label, phone=phone, address=address)
 
 
 async def send_sms(
@@ -284,6 +311,7 @@ async def schedule_appointment_sms(
     first_name: str,
     appointment_dt: datetime,
     tz_choice: Optional[str] = None,
+    address: str = "",
 ) -> dict[str, Optional[str]]:
     """Schedule all three SMS messages for an appointment.
 
@@ -324,7 +352,7 @@ async def schedule_appointment_sms(
     # 1. Confirmation SMS — send immediately as outbound
     # status="outbound" = Close sends it now via their SMS gateway.
     # status="inbox" would create an inbound record only — lead never receives it.
-    confirmation_text = await _sms_confirmation(first_name, day_str, time_str, tz_label, phone)
+    confirmation_text = await _sms_confirmation(first_name, day_str, time_str, tz_label, phone, address)
     results["confirmation"] = await send_sms(
         lead_id=lead_id,
         contact_id=contact_id,
@@ -337,7 +365,7 @@ async def schedule_appointment_sms(
     # 2. 24hr reminder — scheduled
     reminder_24hr_dt = appointment_dt - timedelta(hours=24)
     if reminder_24hr_dt > datetime.now(pytz.utc):
-        reminder_24hr_text = await _sms_24hr_reminder(first_name, time_str, tz_label, phone)
+        reminder_24hr_text = await _sms_24hr_reminder(first_name, time_str, tz_label, phone, address)
         results["reminder_24hr"] = await send_sms(
             lead_id=lead_id,
             contact_id=contact_id,
@@ -356,7 +384,7 @@ async def schedule_appointment_sms(
     # 3. 1hr reminder — scheduled
     reminder_1hr_dt = appointment_dt - timedelta(hours=1)
     if reminder_1hr_dt > datetime.now(pytz.utc):
-        reminder_1hr_text = await _sms_1hr_reminder(first_name, time_str, tz_label, phone)
+        reminder_1hr_text = await _sms_1hr_reminder(first_name, time_str, tz_label, phone, address)
         results["reminder_1hr"] = await send_sms(
             lead_id=lead_id,
             contact_id=contact_id,

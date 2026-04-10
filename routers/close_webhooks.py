@@ -385,12 +385,14 @@ async def _process_appointment(
 
     # Resolve contact_id — try activity data first, then look up from lead
     contact_id = activity_data.get("contact_id")
-    if not contact_id and lead_id:
+    # Always fetch lead data for address (needed for SMS template)
+    lead_data = None
+    if lead_id:
         lead_data = await _get_lead_details(lead_id)
-        if lead_data:
-            contacts = lead_data.get("contacts", [])
-            if contacts:
-                contact_id = contacts[0].get("id")
+    if not contact_id and lead_data:
+        contacts = lead_data.get("contacts", [])
+        if contacts:
+            contact_id = contacts[0].get("id")
 
     if not contact_id:
         logger.error("No contact_id found for lead %s", lead_id)
@@ -404,6 +406,17 @@ async def _process_appointment(
     contact_name = contact.get("name", "")
     first_name = _extract_first_name(contact_name)
     phone = _extract_phone(contact)
+
+    # Extract street address from lead data for SMS template
+    address = ""
+    if lead_data:
+        addresses = lead_data.get("addresses", [])
+        if addresses:
+            addr = addresses[0]
+            line1 = addr.get("address_line_1", "").strip()
+            line2 = addr.get("address_line_2", "").strip()
+            parts = [p for p in [line1, line2] if p]
+            address = ", ".join(parts)
 
     if not phone:
         logger.warning(
@@ -482,6 +495,7 @@ async def _process_appointment(
             first_name=first_name,
             appointment_dt=appointment_dt,
             tz_choice=tz_choice,
+            address=address,
         ) or sms_results  # fallback if schedule_appointment_sms returns None
 
     # --- Step 2: Set up dummy email + GCal event ---

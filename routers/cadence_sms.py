@@ -168,7 +168,7 @@ async def _get_lead_details(lead_id: str) -> Optional[dict]:
 
 
 def _extract_lead_info(lead: dict) -> dict:
-    """Extract first_name, state, and ALL phone numbers across all contacts.
+    """Extract first_name, state, address, and ALL phone numbers across all contacts.
 
     Returns all_phones as a list of {contact_id, phone} dicts so cadence
     SMS fires to every number on the lead. Label quality from mailer data
@@ -195,13 +195,21 @@ def _extract_lead_info(lead: dict) -> dict:
                 seen.add(num)
                 all_phones.append({"contact_id": contact_id, "phone": num})
 
-    # State — from lead address
+    # State + street address from lead
     addresses = lead.get("addresses", [])
     state = addresses[0].get("state", "") if addresses else ""
+    address = ""
+    if addresses:
+        addr = addresses[0]
+        line1 = addr.get("address_line_1", "").strip()
+        line2 = addr.get("address_line_2", "").strip()
+        parts = [p for p in [line1, line2] if p]
+        address = ", ".join(parts)
 
     return {
         "first_name": first_name,
         "state": state,
+        "address": address,
         "all_phones": all_phones,
     }
 
@@ -337,6 +345,7 @@ async def send_cadence_sms(
     sms_text = template_body.format(
         first_name=info["first_name"],
         state=info["state"],
+        address=info["address"],
     )
 
     # Calculate schedule time if not provided

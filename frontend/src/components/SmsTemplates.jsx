@@ -15,8 +15,14 @@ const WORKFLOW_TEMPLATES = [
   { key: 'r3_done', label: 'R3 Done', hint: 'fires after you mark r3-done, sent next morning — then auto-moves lead to nurture' },
 ]
 
-const APPOINTMENT_MERGE_FIELDS = ['{{name}}', '{{date}}', '{{time}}', '{{timezone}}', '{{phone}}']
-const WORKFLOW_MERGE_FIELDS = ['{first_name}', '{state}']
+// All available template variables (shared across both sections)
+const ALL_MERGE_FIELDS = ['{first_name}', '{address}', '{state}', '{date}', '{time}', '{timezone}', '{phone}']
+
+// Appointment SMS variables (subset relevant to booking/reminders)
+const APPOINTMENT_MERGE_FIELDS = ['{first_name}', '{address}', '{date}', '{time}', '{timezone}', '{phone}']
+
+// Workflow SMS variables (subset relevant to cadence follow-ups)
+const WORKFLOW_MERGE_FIELDS = ['{first_name}', '{address}', '{state}']
 
 const SMS_SEGMENT_LENGTH = 160
 
@@ -367,6 +373,52 @@ export default function SmsTemplates() {
           {error}
         </div>
       )}
+
+      <div style={{
+        background: 'var(--surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 4,
+        padding: '0.75rem 1rem',
+        marginBottom: '1.5rem',
+      }}>
+        <p style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: '0.62rem',
+          fontWeight: 600,
+          color: 'var(--text-muted)',
+          letterSpacing: '0.06em',
+          marginBottom: '0.5rem',
+        }}>
+          AVAILABLE VARIABLES
+        </p>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.4rem' }}>
+          {ALL_MERGE_FIELDS.map((field) => (
+            <code
+              key={field}
+              style={{
+                background: 'var(--bg)',
+                border: '1px solid var(--border)',
+                borderRadius: 3,
+                padding: '0.15rem 0.4rem',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.65rem',
+                color: 'var(--accent)',
+              }}
+            >
+              {field}
+            </code>
+          ))}
+        </div>
+        <p style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: '0.55rem',
+          color: 'var(--text-muted)',
+          lineHeight: 1.5,
+          margin: 0,
+        }}>
+          {`{first_name}`} = first name from contact · {`{address}`} = street address (no city/state/zip) · {`{state}`} = state abbreviation · {`{date}`} = "Tuesday, March 18th" · {`{time}`} = "2:00 PM" · {`{timezone}`} = "ET" · {`{phone}`} = phone number
+        </p>
+      </div>
 
       <CollapsibleSection
         title="APPOINTMENT SMS"
