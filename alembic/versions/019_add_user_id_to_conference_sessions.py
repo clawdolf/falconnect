@@ -4,8 +4,8 @@ Existing rows are backfilled to the CLERK_ADMIN_USER_ID env var (Seb) so
 single-operator history stays valid. New sessions will stamp the caller's
 Clerk user_id at creation time.
 
-Revision ID: 018_add_user_id_to_conference_sessions
-Revises: 017_add_activity_id_to_appointment_reminders
+Revision ID: 019_add_user_id_to_conference_sessions
+Revises: 018_normalize_sms_variables
 Create Date: 2026-04-17
 """
 import os
@@ -13,8 +13,8 @@ import os
 import sqlalchemy as sa
 from alembic import op
 
-revision = "018_add_user_id_to_conference_sessions"
-down_revision = "017_add_activity_id_to_appointment_reminders"
+revision = "019_add_user_id_to_conference_sessions"
+down_revision = "018_normalize_sms_variables"
 branch_labels = None
 depends_on = None
 
