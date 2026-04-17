@@ -4,22 +4,75 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from db.database import init_db
+from middleware.security_headers import SecurityHeadersMiddleware
 from routers import leads, webhooks, calendar, analytics, admin, licenses, agents, campaigns, ad_leads, close_webhooks, close_lead_status, conference
 from routers import ghl_cadence, cadence_sms, research
 from routers.sheets import router as sheets_router
 from routers.ghl_dashboard import router as ghl_dashboard_router
 from routers.sms_templates import router as sms_templates_router
+from utils.rate_limit import limiter
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
+def _configure_logging() -> None:
+    """JSON logs in prod (for Render log search), human logs locally.
+
+    Render sets RENDER=true automatically; setting ENVIRONMENT=production on
+    any other host opts in. Anything else stays on the old line-based format.
+    """
+    is_prod = (
+        os.environ.get("RENDER", "").lower() == "true"
+        or os.environ.get("ENVIRONMENT", "").lower() == "production"
+    )
+    handler = logging.StreamHandler()
+    if is_prod:
+        try:
+            from pythonjsonlogger.jsonlogger import JsonFormatter
+            handler.setFormatter(
+                JsonFormatter(
+                    "%(asctime)s %(levelname)s %(name)s %(message)s",
+                    rename_fields={"asctime": "ts", "levelname": "level", "name": "logger"},
+                )
+            )
+        except ImportError:
+            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    else:
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    # Replace any previously attached handlers so we don't double-log.
+    root.handlers[:] = [handler]
+
+
+_configure_logging()
 logger = logging.getLogger("falconconnect")
+
+
+def _configure_sentry() -> None:
+    """Init Sentry if SENTRY_DSN is set. No-op otherwise."""
+    dsn = os.environ.get("SENTRY_DSN")
+    if not dsn:
+        return
+    try:
+        import sentry_sdk
+        sentry_sdk.init(
+            dsn=dsn,
+            traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.05")),
+            environment=os.environ.get("ENVIRONMENT") or (
+                "production" if os.environ.get("RENDER", "").lower() == "true" else "development"
+            ),
+        )
+        logger.info("Sentry initialized")
+    except Exception as exc:
+        logger.warning("Sentry init failed (non-fatal): %s", exc)
+
+
+_configure_sentry()
 
 
 async def _seed_licenses_if_empty() -> None:
@@ -365,6 +418,20 @@ async def lifespan(app: FastAPI):
         logger.critical(_msg)
         raise RuntimeError(_msg)
 
+    # Hard guard: refuse to boot with a silent auth bypass.
+    # If CLERK_SECRET_KEY is missing, require ALLOW_NO_AUTH=true as an
+    # explicit dev opt-in. Production must never have ALLOW_NO_AUTH set.
+    _clerk_secret = os.environ.get("CLERK_SECRET_KEY", "")
+    _allow_no_auth = os.environ.get("ALLOW_NO_AUTH", "").lower() == "true"
+    if not _clerk_secret and not _allow_no_auth:
+        _msg = (
+            "FATAL STARTUP: CLERK_SECRET_KEY is missing and ALLOW_NO_AUTH is not 'true'. "
+            "Booting would silently disable auth on every protected endpoint. "
+            "Restore CLERK_SECRET_KEY in Render, or set ALLOW_NO_AUTH=true locally only."
+        )
+        logger.critical(_msg)
+        raise RuntimeError(_msg)
+
     # Validate critical env vars before anything else
     _validate_critical_env()
 
@@ -446,14 +513,31 @@ async def lifespan(app: FastAPI):
     logger.info("FalconConnect v3 shutting down …")
 
 
+_IS_PROD = (
+    os.environ.get("RENDER", "").lower() == "true"
+    or os.environ.get("ENVIRONMENT", "").lower() == "production"
+)
+
 app = FastAPI(
     title="FalconConnect v3",
     description="Middleware layer: dual GHL + Notion sync, iCal feed, analytics hub.",
     version="3.1.0",
     lifespan=lifespan,
+    docs_url=None if _IS_PROD else "/docs",
+    redoc_url=None if _IS_PROD else "/redoc",
+    openapi_url=None if _IS_PROD else "/openapi.json",
 )
 
-# CORS — allow FalconVerify (falconfinancial.org) to call our API
+# Rate limiter — prevents public endpoints from being hammered.
+# See utils/rate_limit.py for the key function (CF-Connecting-IP aware).
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Security headers (HSTS, nosniff, framing, referrer, permissions-policy)
+app.add_middleware(SecurityHeadersMiddleware)
+
+# CORS — allow FalconVerify (falconfinancial.org) to call our API.
+# Clerk uses Bearer tokens, not cookies, so credentials stay off.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -462,14 +546,20 @@ app.add_middleware(
         "http://localhost:5173",
         "http://localhost:8080",
     ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Google-Token",
+        "X-Requested-With",
+    ],
 )
 
 # Root-level health check (Render probes /health)
 @app.get("/health")
-async def root_health():
+@limiter.limit("30/minute")
+async def root_health(request: Request):
     """Root-level liveness probe — Render expects /health."""
     from config import get_settings
     settings = get_settings()
@@ -480,54 +570,6 @@ async def root_health():
         "clerk_configured": bool(settings.clerk_secret_key),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
-
-
-@app.post("/admin/seed-licenses")
-async def seed_licenses_now():
-    """One-shot: force-insert Seb's 8 licenses. Idempotent — skips existing rows."""
-    from sqlalchemy import text
-    from db.database import _get_session_factory as _sf
-
-    SEB_UID = os.environ.get("CLERK_ADMIN_USER_ID", "user_3ASrwDOrSTaDxCus6f1B5lnDsgz")
-    LICENSES = [
-        ("Arizona",        "AZ", None,      "https://sbs.naic.org/solar-external-lookup/lookup/licensee/summary/21408357?jurisdiction=AZ&entityType=IND&licenseType=PRO", False),
-        ("Florida",        "FL", "G258860", "https://licenseesearch.fldfs.com/Licensee/2700806", False),
-        ("Kansas",         "KS", None,      "https://sbs.naic.org/solar-external-lookup/lookup/licensee/summary/21408357?jurisdiction=KS&entityType=IND&licenseType=PRO", False),
-        ("Maine",          "ME", None,      "https://www.pfr.maine.gov/ALMSOnline/ALMSQuery/ShowDetail.aspx?DetailToken=704F3C701A9F11E086BB0F98AA047C448C67C5003D086308CD98C8424EC1769E", False),
-        ("North Carolina", "NC", None,      "https://sbs.naic.org/solar-external-lookup/lookup/licensee/summary/21408357?jurisdiction=NC&entityType=IND&licenseType=PRO", False),
-        ("Ohio",          "OH", "1733239", "https://gateway.insurance.ohio.gov/UI/ODI.Agent.Public.UI/AgentLocator.mvc/DisplayIndividualDetail/QpHt3y5h2RfCYJRLJrrJLw!3d!3d", False),
-        ("Oregon",         "OR", None,      "https://sbs.naic.org/solar-external-lookup/lookup/licensee/summary/21408357?jurisdiction=OR&entityType=IND&licenseType=PRO", False),
-        ("Pennsylvania",   "PA", "1152553", "https://www.sircon.com/ComplianceExpress/Inquiry/consumerInquiry.do?nonSscrb=Y", True),
-        ("Texas",          "TX", "3317972", "https://www.sircon.com/ComplianceExpress/Inquiry/consumerInquiry.do?nonSscrb=Y", True),
-    ]
-    inserted = 0
-    skipped = 0
-    try:
-        async with _sf()() as session:
-            for state, abbr, lic_num, verify_url, manual in LICENSES:
-                result = await session.execute(
-                    text("SELECT COUNT(*) FROM licenses WHERE user_id=:uid AND state_abbreviation=:abbr"),
-                    {"uid": SEB_UID, "abbr": abbr}
-                )
-                if result.scalar() == 0:
-                    await session.execute(
-                        text(
-                            "INSERT INTO licenses (user_id, state, state_abbreviation, license_number, "
-                            "verify_url, needs_manual_verification, status, license_type, created_at, updated_at) "
-                            "VALUES (:uid,:state,:abbr,:lic_num,:verify_url,:manual,'active','insurance_producer',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
-                        ),
-                        {"uid": SEB_UID, "state": state, "abbr": abbr, "lic_num": lic_num,
-                         "verify_url": verify_url, "manual": manual}
-                    )
-                    inserted += 1
-                else:
-                    skipped += 1
-            await session.commit()
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
-    return {"ok": True, "inserted": inserted, "skipped": skipped}
-
-
 
 
 # API routers
@@ -548,19 +590,6 @@ app.include_router(research.router, prefix="/api/research", tags=["Research"])
 app.include_router(ghl_dashboard_router, prefix="/api", tags=["GHL Dashboard"])
 app.include_router(conference.router, prefix="/api", tags=["Conference Bridge"])
 app.include_router(ghl_cadence.router, prefix="/api/ghl", tags=["GHL Cadence"])
-
-
-# ── TEMP: one-time xref clear — remove after use ──
-from fastapi import Request as _Request
-@app.delete("/admin/clear-xref")
-async def clear_xref(_req: _Request):
-    from db.database import get_session
-    from sqlalchemy import text
-    async with get_session() as session:
-        result = await session.execute(text("DELETE FROM lead_xref"))
-        await session.commit()
-        return {"deleted": result.rowcount}
-# ── END TEMP ──
 app.include_router(cadence_sms.router, prefix="/api/close", tags=["Cadence SMS"])
 app.include_router(close_lead_status.router, prefix="/api/close", tags=["Close Lead Status Kill-Switch"])
 
@@ -611,9 +640,16 @@ if os.path.isdir(frontend_dist):
     # index.html for directory paths, not arbitrary paths like /licenses.
     from fastapi.responses import FileResponse
 
+    _BLOCKED_DOC_PATHS = {"docs", "redoc", "openapi.json"}
+
     @app.get("/{full_path:path}")
     async def spa_catchall(full_path: str):
         """Serve index.html for all unmatched paths (SPA client-side routing)."""
+        # In prod, explicitly 404 the API doc paths so the SPA fallback
+        # doesn't mask the FastAPI docs_url=None gating.
+        if _IS_PROD and full_path in _BLOCKED_DOC_PATHS:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404)
         # Try to serve the exact file first (favicon.ico, falcon-logo.png, etc.)
         file_path = os.path.join(frontend_dist, full_path)
         if full_path and os.path.isfile(file_path):

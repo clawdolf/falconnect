@@ -3,12 +3,13 @@
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import get_session
 from middleware.auth import require_auth
+from utils.rate_limit import limiter
 
 logger = logging.getLogger("falconconnect.admin")
 
@@ -16,7 +17,8 @@ router = APIRouter()
 
 
 @router.get("/health")
-async def health_check():
+@limiter.limit("30/minute")
+async def health_check(request: Request):
     """Basic liveness probe — returns 200 if the app is running. Public."""
     return {
         "status": "healthy",
@@ -27,7 +29,8 @@ async def health_check():
 
 
 @router.get("/health/db")
-async def db_health(session: AsyncSession = Depends(get_session)):
+@limiter.limit("30/minute")
+async def db_health(request: Request, session: AsyncSession = Depends(get_session)):
     """Database connectivity check — runs a simple query. Public."""
     try:
         result = await session.execute(text("SELECT 1"))

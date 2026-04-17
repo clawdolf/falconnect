@@ -11,10 +11,29 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import select
+
 from db.database import get_session
+from db.models import ConferenceSession
 from middleware.auth import require_auth
 from services import conference as conf_service
 from services import twilio_client
+from utils.rate_limit import limiter
+
+
+async def _assert_conf_ownership(
+    session: AsyncSession, conf_id: str, user: dict
+) -> None:
+    """Raise 403/404 if `conf_id` does not belong to the caller."""
+    result = await session.execute(
+        select(ConferenceSession.user_id).where(ConferenceSession.id == conf_id)
+    )
+    owner = result.scalar_one_or_none()
+    if owner is None:
+        raise HTTPException(status_code=404, detail="Conference not found")
+    caller = user.get("user_id") or user.get("sub")
+    if owner != caller:
+        raise HTTPException(status_code=403, detail="Not your conference session")
 
 logger = logging.getLogger("falconconnect.router.conference")
 
@@ -51,8 +70,9 @@ class CallerIdConfirmRequest(BaseModel):
 
 
 @router.get("/conference/health")
-async def conference_health():
-    """Debug: confirm Twilio creds are loaded."""
+@limiter.limit("10/minute")
+async def conference_health(request: Request, user=Depends(require_auth)):
+    """Debug: confirm Twilio creds are loaded. Authenticated only — SID is sensitive."""
     from config import get_settings
     s = get_settings()
     sid = s.twilio_account_sid
@@ -68,8 +88,10 @@ async def list_sessions(
     session: AsyncSession = Depends(get_session),
     user=Depends(require_auth),
 ):
-    """List recent conference sessions (last 10)."""
-    return await conf_service.list_sessions(session)
+    """List recent conference sessions (last 10), scoped to the caller."""
+    return await conf_service.list_sessions(
+        session, user_id=user.get("user_id") or user.get("sub")
+    )
 
 
 @router.post("/conference/start")
@@ -88,6 +110,7 @@ async def start_conference(
             lead_phone=req.lead_phone,
             carrier_phone=req.carrier_phone,
             seb_close_number="+14809999040",  # Always Seb's Close main line — hardcoded so Close records inbound leg
+            user_id=user.get("user_id") or user.get("sub"),
             lead_id=req.lead_id,
             base_url=base_url,
         )
@@ -108,6 +131,7 @@ async def dial_seb(
     user=Depends(require_auth),
 ):
     """Dial Seb's Close number into the conference. Called after lead picks up."""
+    await _assert_conf_ownership(session, conf_id, user)
     base_url = _get_public_url(request)
     try:
         result = await conf_service.dial_seb(session, conf_id, base_url=base_url)
@@ -125,6 +149,7 @@ async def dial_carrier(
     user=Depends(require_auth),
 ):
     """Dial the carrier into an existing conference."""
+    await _assert_conf_ownership(session, conf_id, user)
     base_url = _get_public_url(request)
     try:
         result = await conf_service.dial_carrier(session, conf_id, base_url=base_url)
@@ -143,6 +168,7 @@ async def get_conference(
     user=Depends(require_auth),
 ):
     """Get live conference status including participant states."""
+    await _assert_conf_ownership(session, conf_id, user)
     try:
         return await conf_service.get_conference_status(session, conf_id)
     except ValueError as e:
@@ -157,6 +183,7 @@ async def mute_participant(
     user=Depends(require_auth),
 ):
     """Mute a participant (seb|lead|carrier)."""
+    await _assert_conf_ownership(session, conf_id, user)
     _validate_participant(participant)
     try:
         return await conf_service.mute_participant(session, conf_id, participant)
@@ -172,6 +199,7 @@ async def unmute_participant(
     user=Depends(require_auth),
 ):
     """Unmute a participant."""
+    await _assert_conf_ownership(session, conf_id, user)
     _validate_participant(participant)
     try:
         return await conf_service.unmute_participant(session, conf_id, participant)
@@ -187,6 +215,7 @@ async def hold_participant(
     user=Depends(require_auth),
 ):
     """Put a participant on hold with music."""
+    await _assert_conf_ownership(session, conf_id, user)
     _validate_participant(participant)
     try:
         return await conf_service.hold_participant(session, conf_id, participant)
@@ -202,6 +231,7 @@ async def unhold_participant(
     user=Depends(require_auth),
 ):
     """Take a participant off hold."""
+    await _assert_conf_ownership(session, conf_id, user)
     _validate_participant(participant)
     try:
         return await conf_service.unhold_participant(session, conf_id, participant)
@@ -216,6 +246,7 @@ async def end_conference(
     user=Depends(require_auth),
 ):
     """End a conference — hangs up all participants, logs to Close."""
+    await _assert_conf_ownership(session, conf_id, user)
     try:
         return await conf_service.end_conference_session(session, conf_id)
     except ValueError as e:

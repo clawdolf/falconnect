@@ -125,6 +125,65 @@ Deployed on **Render** (service ID: `srv-d69n3c8gjchc73dkq2d0`).
 - SMS sent via Close's built-in SMS with phone number pool for area-code matching
 - Appointment reminders tracked in `appointment_reminders` table
 
+## Operations
+
+### Auth fail-closed
+
+If `CLERK_SECRET_KEY` is missing from Render the service **crashes at startup**
+rather than silently disabling auth. To run locally without Clerk, set
+`ALLOW_NO_AUTH=true` in `.env` — never set this on Render.
+
+### Rate limiting
+
+Public endpoints are rate-limited via `slowapi`. Limits are defined per-route;
+see `utils/rate_limit.py` for the key function (prefers `CF-Connecting-IP`).
+429 responses are expected for abuse traffic — not an incident.
+
+### Bot protection
+
+Public ad landing pages run Cloudflare Turnstile. The backend verifies tokens
+server-side; if `TURNSTILE_SECRET` is unset, verification is skipped (rollout
+coordination mode). **Deploy order**: set `VITE_TURNSTILE_SITEKEY` on
+Cloudflare Pages first, then `TURNSTILE_SECRET` on Render — reversing this
+order will reject legitimate form submissions.
+
+### Observability
+
+- `SENTRY_DSN` (backend) / `VITE_SENTRY_DSN` (frontend) — unset = no-op
+- Production logs are JSON (enable with `RENDER=true` or `ENVIRONMENT=production`)
+- Auth failures: search logs for `"event":"auth_failed"`
+- Rate-limit hits: slowapi logs `ratelimit X per Y exceeded at endpoint …`
+
+### Webhook secret rotation
+
+Rotate `CLOSE_WEBHOOK_SECRET` / `GHL_WEBHOOK_SECRET` if leaked:
+
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"  # 64-char hex
+```
+
+1. Set the new value in Render env and redeploy.
+2. Update the matching value in Close Developer → Webhook / GHL Settings → Integrations.
+3. Expect a short window (~5 min) where one side has the old secret and the
+   other has the new — webhooks will fail signature verification in that gap.
+
+### Mac Mini research poller
+
+`~/Library/LaunchAgents/com.falcon.trigger-poller.plist` polls
+`/api/research/triggers/pending` every 300s using `X-Loop-Token`. The token
+value must match `LOOP_SERVICE_TOKEN` in Render env. If you rotate it,
+update both sides before restarting the LaunchAgent:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.falcon.trigger-poller.plist
+launchctl load ~/Library/LaunchAgents/com.falcon.trigger-poller.plist
+```
+
+### Production doc routes
+
+`/docs`, `/redoc`, and `/openapi.json` return 404 in production
+(`RENDER=true` or `ENVIRONMENT=production`). Locally they are reachable.
+
 ---
 
 *Falcon Financial — Seb Taillieu*

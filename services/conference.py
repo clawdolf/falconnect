@@ -70,6 +70,7 @@ async def start_conference(
     lead_phone: str,
     carrier_phone: str,
     seb_close_number: str,
+    user_id: str,
     lead_id: Optional[str] = None,
     base_url: str = "",
 ) -> Dict[str, Any]:
@@ -93,6 +94,7 @@ async def start_conference(
 
     # Create DB record
     conf_session = ConferenceSession(
+        user_id=user_id,
         lead_phone=lead_phone,
         carrier_phone=carrier_phone,
         seb_phone=seb_close_number,
@@ -375,13 +377,14 @@ async def get_conference_status(
 async def list_sessions(
     session: AsyncSession,
     limit: int = 10,
+    user_id: Optional[str] = None,
 ) -> list:
-    """List recent conference sessions."""
-    result = await session.execute(
-        select(ConferenceSession)
-        .order_by(desc(ConferenceSession.started_at))
-        .limit(limit)
-    )
+    """List recent conference sessions, scoped to `user_id` when provided."""
+    stmt = select(ConferenceSession)
+    if user_id:
+        stmt = stmt.where(ConferenceSession.user_id == user_id)
+    stmt = stmt.order_by(desc(ConferenceSession.started_at)).limit(limit)
+    result = await session.execute(stmt)
     sessions = result.scalars().all()
     return [
         {

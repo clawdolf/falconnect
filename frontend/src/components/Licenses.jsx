@@ -160,15 +160,13 @@ function Licenses() {
   }
 
   const runHealthCheck = async (licenseList, headers) => {
-    const urls = licenseList
-      .filter(l => l.verify_url)
-      .map(l => l.verify_url)
-    if (urls.length === 0) return
+    if (!licenseList.some(l => l.verify_url)) return
     try {
+      // Body is ignored server-side; URLs come from the DB scoped to the user.
       const resp = await fetch('/api/licenses/health-check', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ urls }),
+        body: JSON.stringify({}),
       })
       if (resp.ok) {
         const results = await resp.json()

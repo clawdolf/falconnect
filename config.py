@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     # --- Quo (OpenPhone) ---
     quo_api_key: str = ""
 
+    # --- Cloudflare Turnstile (bot protection on public lead forms) ---
+    # If empty, verification is skipped (rollout coordination mode).
+    # Set both TURNSTILE_SECRET here and VITE_TURNSTILE_SITEKEY on
+    # falconverify to enforce.
+    turnstile_secret: str = ""
+
     # (GHL Dashboard uses ghl_private_token and ghl_location_id from the GHL section above)
 
 

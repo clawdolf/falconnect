@@ -277,6 +277,7 @@ class ConferenceSession(Base):
     __tablename__ = "conference_sessions"
 
     id: str = Column(String(36), primary_key=True, default=lambda: str(__import__("uuid").uuid4()))
+    user_id: str = Column(String(128), nullable=False, index=True)  # Clerk user that owns the session
     conference_sid: str = Column(String(128), nullable=True, index=True)
     lead_id: str = Column(String(128), nullable=True)
     lead_phone: str = Column(String(20), nullable=False)

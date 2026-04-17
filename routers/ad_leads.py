@@ -7,10 +7,12 @@ No auth required — this endpoint is hit by public landing page forms.
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from services import close_client
+from utils.rate_limit import limiter
+from utils.turnstile import verify_turnstile
 
 logger = logging.getLogger("falconconnect.ad_leads")
 
@@ -40,6 +42,11 @@ class AdLeadPayload(BaseModel):
     ad_platform: Optional[str] = Field(None, max_length=64)
     lead_form_variant: Optional[str] = Field(None, max_length=128)
 
+    # Bot protection
+    turnstile_token: Optional[str] = Field(None, max_length=4096)
+    # Honeypot — real users leave this empty. Bots filling "all fields" trip 422.
+    website: Optional[str] = Field(None, max_length=0)
+
 
 class AdLeadResponse(BaseModel):
     """Response from ad lead capture endpoint."""
@@ -56,11 +63,22 @@ class AdLeadResponse(BaseModel):
     response_model=AdLeadResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def capture_ad_lead(payload: AdLeadPayload):
+@limiter.limit("5/minute;30/hour")
+async def capture_ad_lead(request: Request, payload: AdLeadPayload):
     """Capture a lead from an ad landing page — writes to Close.com.
 
     Public endpoint (no auth). Called by falconfinancial.org landing page forms.
+    Bot protection: Cloudflare Turnstile + hidden honeypot + rate limit.
     """
+    client_ip = request.headers.get("CF-Connecting-IP") or (
+        request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or None
+    )
+    if not await verify_turnstile(payload.turnstile_token, client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Bot verification failed.",
+        )
+
     try:
         result = await close_client.create_lead(
             first_name=payload.first_name,

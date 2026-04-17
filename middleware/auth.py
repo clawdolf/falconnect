@@ -140,14 +140,23 @@ async def require_auth(
 
     Returns decoded JWT claims. Use `user["sub"]` for the Clerk user ID.
 
-    If CLERK_SECRET_KEY is not set (dev mode), bypasses auth entirely.
+    Fails closed when CLERK_SECRET_KEY is unset — requests are rejected with
+    503 unless ALLOW_NO_AUTH=true is explicitly opted in (dev only). The
+    lifespan guard in main.py prevents the service booting in prod with the
+    bypass active.
     """
+    import os
+
     settings = get_settings()
 
     if not settings.clerk_secret_key:
-        import os
+        if os.environ.get("ALLOW_NO_AUTH", "").lower() != "true":
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Auth not configured (CLERK_SECRET_KEY missing).",
+            )
         dev_user_id = os.environ.get("CLERK_ADMIN_USER_ID", "user_3ASrwDOrSTaDxCus6f1B5lnDsgz")
-        logger.warning("CLERK_SECRET_KEY not set — auth DISABLED (dev mode, user_id=%s).", dev_user_id)
+        logger.warning("ALLOW_NO_AUTH=true — auth DISABLED (dev only, user_id=%s).", dev_user_id)
         return {
             "sub": dev_user_id,
             "user_id": dev_user_id,
@@ -155,6 +164,7 @@ async def require_auth(
         }
 
     if not credentials:
+        logger.info("auth_failed", extra={"event": "auth_failed", "reason": "missing_authorization_header"})
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing Authorization header.",

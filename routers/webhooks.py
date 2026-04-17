@@ -19,6 +19,7 @@ from db.models import LeadXref, SyncLog
 from models.webhook import GHLWebhookPayload
 from services import notion
 from utils.auth import verify_webhook_secret
+from utils.rate_limit import limiter
 
 logger = logging.getLogger("falconconnect.webhooks")
 
@@ -43,6 +44,7 @@ def _normalize_event_type(raw_type: str) -> str:
 
 
 @router.post("/ghl")
+@limiter.limit("120/minute")
 async def ghl_webhook(
     request: Request,
     _secret: str = Depends(verify_webhook_secret),

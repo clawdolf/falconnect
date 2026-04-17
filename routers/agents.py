@@ -7,7 +7,7 @@ import json
 import logging
 from typing import Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +19,7 @@ from models.agent import (
     TestimonialCreate,
     TestimonialUpdate,
 )
+from utils.rate_limit import limiter
 
 logger = logging.getLogger("falconconnect.agents")
 
@@ -30,9 +31,18 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 
+_PUBLIC_CACHE = "public, max-age=60, s-maxage=300"
+
+
 @router.get("/agents")
-async def list_agents(session: AsyncSession = Depends(get_session)):
+@limiter.limit("60/minute")
+async def list_agents(
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
     """List all active public agents, including live license count and state abbreviations."""
+    response.headers["Cache-Control"] = _PUBLIC_CACHE
     from db.models import License as DBLicense
     from sqlalchemy import func
 
@@ -78,8 +88,15 @@ async def list_agents(session: AsyncSession = Depends(get_session)):
 
 
 @router.get("/agents/{slug}")
-async def get_agent_profile(slug: str, session: AsyncSession = Depends(get_session)):
+@limiter.limit("60/minute")
+async def get_agent_profile(
+    request: Request,
+    response: Response,
+    slug: str,
+    session: AsyncSession = Depends(get_session),
+):
     """Get full agent profile including licenses and testimonials."""
+    response.headers["Cache-Control"] = _PUBLIC_CACHE
     # Query agent from DB
     agent_result = await session.execute(
         select(DBAgent).where(DBAgent.slug == slug, DBAgent.is_active == True)
@@ -178,6 +195,17 @@ async def _get_agent_by_slug(
     return agent
 
 
+async def _get_owned_agent(
+    slug: str, user: Dict[str, Any], session: AsyncSession
+) -> DBAgent:
+    """Resolve agent by slug and verify the caller owns it, else 403."""
+    agent = await _get_agent_by_slug(slug, session)
+    caller_id = user.get("user_id") or user.get("sub")
+    if agent.user_id and agent.user_id != caller_id:
+        raise HTTPException(status_code=403, detail="Not your agent profile")
+    return agent
+
+
 @router.put("/agents/{slug}/profile")
 async def update_agent_profile(
     slug: str,
@@ -186,7 +214,7 @@ async def update_agent_profile(
     user: Dict[str, Any] = Depends(require_auth),
 ):
     """Update agent profile fields (admin only)."""
-    agent = await _get_agent_by_slug(slug, session)
+    agent = await _get_owned_agent(slug, user, session)
 
     update_data = body.model_dump(exclude_unset=True)
     if not update_data:
@@ -206,7 +234,7 @@ async def list_testimonials(
     user: Dict[str, Any] = Depends(require_auth),
 ):
     """List ALL testimonials for an agent (including unpublished) — admin only."""
-    agent = await _get_agent_by_slug(slug, session)
+    agent = await _get_owned_agent(slug, user, session)
 
     result = await session.execute(
         select(DBTestimonial)
@@ -236,7 +264,7 @@ async def create_testimonial(
     user: Dict[str, Any] = Depends(require_auth),
 ):
     """Add a new testimonial for an agent (admin only)."""
-    agent = await _get_agent_by_slug(slug, session)
+    agent = await _get_owned_agent(slug, user, session)
 
     testimonial = DBTestimonial(
         agent_id=agent.id,
@@ -260,7 +288,7 @@ async def update_testimonial(
     user: Dict[str, Any] = Depends(require_auth),
 ):
     """Update an existing testimonial (admin only)."""
-    agent = await _get_agent_by_slug(slug, session)
+    agent = await _get_owned_agent(slug, user, session)
 
     result = await session.execute(
         select(DBTestimonial).where(
@@ -293,7 +321,7 @@ async def delete_testimonial(
     user: Dict[str, Any] = Depends(require_auth),
 ):
     """Soft-delete a testimonial (set is_published=false) — admin only."""
-    agent = await _get_agent_by_slug(slug, session)
+    agent = await _get_owned_agent(slug, user, session)
 
     result = await session.execute(
         select(DBTestimonial).where(

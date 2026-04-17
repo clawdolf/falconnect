@@ -4,12 +4,17 @@ import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query
 from config import Settings, get_settings
+from middleware.auth import require_auth
 from services.ghl_dashboard_client import GHLDashboardClient
 from services.ghl_dashboard_sync import run_compliance_check
 
 logger = logging.getLogger("ghl_dashboard")
 
-router = APIRouter(prefix="/ghl-dashboard", tags=["GHL Dashboard"])
+router = APIRouter(
+    prefix="/ghl-dashboard",
+    tags=["GHL Dashboard"],
+    dependencies=[Depends(require_auth)],
+)
 
 
 def get_client(settings: Settings = Depends(get_settings)) -> GHLDashboardClient:

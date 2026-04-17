@@ -53,6 +53,7 @@ from services.google_calendar import (
     delete_event,
 )
 from services.telegram_alerts import send_telegram_alert
+from utils.rate_limit import limiter
 
 # Custom field ID for Appointment Status (choices: Booked, Confirmed, Rescheduled, Cancelled, No Show)
 CF_APPOINTMENT_STATUS = "cf_fpLqCQ4At7nrMwzAbHZDGQzgBvvq9WuenxG2PLK1i7u"
@@ -801,6 +802,7 @@ async def _handle_lead_updated(event: dict) -> dict:
     return result
 
 @router.post("/close")
+@limiter.limit("120/minute")
 async def close_webhook(request: Request):
     """Receive and process Close.com webhook events.
 
