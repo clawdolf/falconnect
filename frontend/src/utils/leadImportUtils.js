@@ -562,6 +562,16 @@ export function buildLeads(rows, headers, columnMap, vendor, tier, leadType, lea
     // Vendor Lead ID: force to string (may come as large integer from CSV)
     if (lead.vendor_lead_id) lead.vendor_lead_id = String(lead.vendor_lead_id)
 
+    // Strip non-numeric prefixes from age fields (e.g. HOF "Age: 65" → "65")
+    if (lead.age) {
+      const m = String(lead.age).match(/\d+/)
+      if (m) lead.age = m[0]
+    }
+    if (lead.spouse_age) {
+      const m = String(lead.spouse_age).match(/\d+/)
+      if (m) lead.spouse_age = m[0]
+    }
+
     // Spouse Age: cast to int, drop if invalid/zero
     if (lead.spouse_age) {
       const sa = parseInt(lead.spouse_age, 10)
